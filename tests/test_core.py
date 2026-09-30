@@ -229,7 +229,6 @@ def test_simplify_conditions():
     assert {"feature": "c", "op": "not_in", "value": ["a", "b"]} in out
 
 
-@pytest.mark.xfail(strict=True, reason="known: AdaGrad's first step ignores the gradient size; fix pending the lr/g0 sweep")
 def test_one_uncertain_teacher_label_does_not_create_certainty():
     """Regression (first user trial): a 55% teacher label made the student 94% sure,
     and spilled over to unrelated messages sharing one word."""

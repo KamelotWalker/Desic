@@ -81,13 +81,18 @@ class PriorExpert(Expert):
 class LinearExpert(Expert):
     """Softmax regression trained by AdaGrad on the log loss (soft targets allowed).
 
-    The AdaGrad accumulator is capped so the learning rate never decays below
-    lr / sqrt(cap): the model keeps some plasticity for drifting feedback.
+    The AdaGrad accumulator starts at ``g0`` so a step is proportional to the
+    gradient: without it the very first update of a new word is ±lr whatever
+    the evidence, and one 55%-sure teacher label made the student 94% sure
+    (Banking77 sweep: lr 2.0 / g0 1.0 keeps accuracy within 0.6 points while a
+    single human correction still sticks). The accumulator is capped so the
+    learning rate never decays below lr / sqrt(cap): some plasticity remains
+    for drifting feedback.
     """
 
     name = "linear"
 
-    def __init__(self, lr: float = 0.5, g_cap: float = 25.0, l2: float = 1e-4, g0: float = 0.0) -> None:
+    def __init__(self, lr: float = 2.0, g_cap: float = 25.0, l2: float = 1e-4, g0: float = 1.0) -> None:
         self.lr = lr
         self.g_cap = g_cap
         self.l2 = l2

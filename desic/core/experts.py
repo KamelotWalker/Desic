@@ -81,18 +81,18 @@ class PriorExpert(Expert):
 class LinearExpert(Expert):
     """Softmax regression trained by AdaGrad on the log loss (soft targets allowed).
 
-    The AdaGrad accumulator starts at ``g0`` so a step is proportional to the
-    gradient: without it the very first update of a new word is ±lr whatever
-    the evidence, and one 55%-sure teacher label made the student 94% sure
-    (Banking77 sweep: lr 2.0 / g0 1.0 keeps accuracy within 0.6 points while a
-    single human correction still sticks). The accumulator is capped so the
-    learning rate never decays below lr / sqrt(cap): some plasticity remains
-    for drifting feedback.
+    AdaGrad makes a step's size independent of the gradient's, so a label's
+    weight and informativeness scale the step directly (see ``learn``): one
+    55%-sure teacher label used to make the student 94% sure. A global
+    initial accumulator (``g0``) also fixes that but hurt few-shot calibration
+    and forgetting on Banking77 (benchmarks/stage-01a), so it stays off. The
+    accumulator is capped so the learning rate never decays below
+    lr / sqrt(cap): some plasticity remains for drifting feedback.
     """
 
     name = "linear"
 
-    def __init__(self, lr: float = 2.0, g_cap: float = 25.0, l2: float = 1e-4, g0: float = 1.0) -> None:
+    def __init__(self, lr: float = 0.5, g_cap: float = 25.0, l2: float = 1e-4, g0: float = 0.0) -> None:
         self.lr = lr
         self.g_cap = g_cap
         self.l2 = l2
@@ -120,6 +120,15 @@ class LinearExpert(Expert):
         z = self._logits(x, options)
         m = max(z.values())
         p = normalize({o: math.exp(v - m) for o, v in z.items()})
+        # AdaGrad normalises the gradient away (a first step is ±lr whatever the evidence), so
+        # the label's weight and informativeness are applied to the step itself: a one-hot label
+        # with weight 1 behaves exactly as before, a 55%-sure teacher label barely moves anything.
+        k = max(len(options), 2)
+        info = max(0.0, (max(target.values()) - 1.0 / k) / (1.0 - 1.0 / k))
+        scale = min(weight, 1.0) * info
+        if scale <= 0:
+            self.seen += 1
+            return
         for o in options:
             grad = (p[o] - target.get(o, 0.0)) * weight
             if abs(grad) < 1e-9:
@@ -130,7 +139,7 @@ class LinearExpert(Expert):
                 gi = grad * v + self.l2 * wo.get(f, 0.0)
                 acc = min(go.get(f, getattr(self, "g0", 0.0)) + gi * gi, self.g_cap)
                 go[f] = acc
-                wo[f] = wo.get(f, 0.0) - self.lr * gi / (math.sqrt(acc) + 1e-8)
+                wo[f] = wo.get(f, 0.0) - scale * self.lr * gi / (math.sqrt(acc) + 1e-8)
         self.seen += 1
 
     def explain(self, x: Features, options: list[str], chosen: str) -> dict:

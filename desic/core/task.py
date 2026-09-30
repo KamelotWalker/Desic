@@ -31,6 +31,7 @@ TRUE_WORDS = {"true", "yes", "1", "evet", "doğru", "dogru", "y", "t"}
 FALSE_WORDS = {"false", "no", "0", "hayır", "hayir", "yanlış", "yanlis", "n", "f"}
 GROUND_TRUTH_SOURCES = ("human", "dataset")
 FAMILIAR = 0.5  # below this share of known evidence the answer is pulled toward "don't know"
+KNOWN_WEIGHT = 0.05  # a feature counts as known once some answer's weight on it reaches this
 
 DEFAULT_SETTINGS = {
     "abstain_threshold": 0.6,   # abstain when calibrated confidence is below this
@@ -229,7 +230,9 @@ class DecisionTask:
             if f == "bias" or f.startswith("n:"):
                 continue
             total += v * v
-            if any(f in w for w in vocab):
+            # "known" means learned with real evidence: a coin-flip teacher label leaves
+            # near-zero weights behind and must not make its words look familiar
+            if any(abs(w.get(f, 0.0)) >= KNOWN_WEIGHT for w in vocab):
                 known += v * v
         return 1.0 if total == 0 else known / total
 

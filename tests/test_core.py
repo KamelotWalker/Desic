@@ -236,9 +236,22 @@ def test_one_uncertain_teacher_label_does_not_create_certainty():
     t = trained("urgent", {"type": "noul", "instructions": "needs a response today"},
                 [(s, str(u)) for s, _, u in (ticket(rng) for _ in range(600))])
     s = "Merhaba, erken rezervasyon yaptırmak istiyorum"
+    other = "Rezervasyonumu iptal etmek istiyorum"
+    before_same, before_other = (t.public(t.answer(x))["probability"] for x in (s, other))
     t.learn(s, {"true": 0.549, "false": 0.451}, source="teacher")
-    assert t.public(t.answer(s))["probability"] < 0.75
-    assert t.public(t.answer("Rezervasyonumu iptal etmek istiyorum"))["probability"] < 0.6
+    # a coin-flip teacher label must not move the student much, here or elsewhere
+    assert abs(t.public(t.answer(s))["probability"] - before_same) < 0.1
+    assert abs(t.public(t.answer(other))["probability"] - before_other) < 0.05
+
+
+def test_a_confident_teacher_label_still_teaches():
+    rng = random.Random(1)
+    t = trained("urgent", {"type": "noul", "instructions": "needs a response today"},
+                [(s, str(u)) for s, _, u in (ticket(rng) for _ in range(600))])
+    s = "Merhaba, erken rezervasyon yaptırmak istiyorum"
+    before = t.public(t.answer(s))["probability"]
+    t.learn(s, {"true": 0.9, "false": 0.1}, source="teacher")
+    assert t.public(t.answer(s))["probability"] > before + 0.2
 
 
 def test_a_human_correction_still_sticks():

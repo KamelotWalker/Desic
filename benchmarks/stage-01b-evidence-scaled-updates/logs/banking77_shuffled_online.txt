@@ -1,0 +1,11 @@
+Banking77: 10003 train, 3080 test, 77 intents
+
+Online student (learns one example at a time):
+   10 examples/intent  accuracy 57.2%  log loss 1.702  ECE 0.122
+   25 examples/intent  accuracy 72.8%  log loss 0.981  ECE 0.019
+   50 examples/intent  accuracy 82.6%  log loss 0.623  ECE 0.011
+  all (10003)       accuracy 88.5%  log loss 0.427  ECE 0.013  (64.7s)
+      answer only when ≥50% sure: coverage 93.4%, accuracy 92.0%
+      answer only when ≥70% sure: coverage 85.7%, accuracy 95.1%
+      answer only when ≥90% sure: coverage 73.3%, accuracy 97.8%
+      expert weights {'prior': 0.0051, 'linear': 0.7371, 'tree': 0.25, 'memory': 0.0078}

@@ -18,10 +18,14 @@ import argparse
 import asyncio
 import csv
 import io
+import json
+import platform
 import random
+import subprocess
 import tempfile
 import time
 import urllib.request
+from pathlib import Path
 
 from desic.core.calibration import TaskMetrics
 from desic.core.task import DecisionTask, QuestionSpec
@@ -109,7 +113,9 @@ def main() -> None:
     ap.add_argument("--epochs", type=int, default=6)
     ap.add_argument("--backbone", default="scratch")
     ap.add_argument("--sorted", action="store_true", help="stress test: stream the training file in its original, class-sorted order")
+    ap.add_argument("--out", help="also write the results as JSON to this file")
     args = ap.parse_args()
+    results: dict = {"benchmark": "banking77", "meta": _meta(args), "online": {}}
     train, test = load("train"), load("test")
     if not args.sorted:  # the file is sorted by intent; Desic's dataset training shuffles too
         random.Random(0).shuffle(train)
@@ -118,8 +124,10 @@ def main() -> None:
     print("Online student (learns one example at a time):")
     for k in (10, 25, 50):
         r = online(per_class_subset(train, k), test, classes)
+        results["online"][f"{k}_per_intent"] = r
         print(f"  {k:>3} examples/intent  accuracy {r['accuracy']:.1%}  log loss {r['nll']:.3f}  ECE {r['ece']:.3f}")
     r = online(train, test, classes)
+    results["online"]["all"] = r
     print(f"  all ({len(train)})       accuracy {r['accuracy']:.1%}  log loss {r['nll']:.3f}  ECE {r['ece']:.3f}  "
           f"({r['train_seconds']}s)")
     for t in (0.5, 0.7, 0.9):
@@ -128,8 +136,10 @@ def main() -> None:
     if args.neural:
         print(f"\nNeural student ({args.backbone}, {args.epochs} epochs) + online experts:")
         n = neural(train, test, classes, args.epochs, args.backbone)
+        results["neural"] = n
         if "error" in n:
             print("  error:", n["error"])
+            _write(args.out, results)
             return
         print(f"  neural alone  accuracy {n['neural_alone']['accuracy']:.1%}  log loss {n['neural_alone']['nll']:.3f}  "
               f"ECE {n['neural_alone']['ece']:.3f}  ({n['train_seconds']}s)")
@@ -138,6 +148,29 @@ def main() -> None:
         for t in (0.5, 0.7, 0.9):
             print(f"      answer only when ≥{t:.0%} sure: coverage {mx[f'coverage@{t}']:.1%}, accuracy {mx[f'answered_acc@{t}']:.1%}")
         print(f"      expert weights {n['weights']}")
+    _write(args.out, results)
+
+
+def _meta(args: argparse.Namespace) -> dict:
+    try:
+        commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True, timeout=5).stdout.strip()
+    except Exception:
+        commit = ""
+    try:
+        import torch
+
+        torch_version, gpu = torch.__version__, torch.cuda.is_available()
+    except Exception:
+        torch_version, gpu = None, False
+    return {"date": time.strftime("%Y-%m-%d %H:%M:%S %Z"), "commit": commit, "python": platform.python_version(),
+            "machine": platform.machine(), "cpu_count": __import__("os").cpu_count(), "torch": torch_version, "gpu": gpu,
+            "args": vars(args)}
+
+
+def _write(path: str | None, results: dict) -> None:
+    if path:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        Path(path).write_text(json.dumps(results, indent=2, ensure_ascii=False))
 
 
 if __name__ == "__main__":

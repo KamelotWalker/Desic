@@ -87,10 +87,11 @@ class LinearExpert(Expert):
 
     name = "linear"
 
-    def __init__(self, lr: float = 0.5, g_cap: float = 25.0, l2: float = 1e-4) -> None:
+    def __init__(self, lr: float = 0.5, g_cap: float = 25.0, l2: float = 1e-4, g0: float = 0.0) -> None:
         self.lr = lr
         self.g_cap = g_cap
         self.l2 = l2
+        self.g0 = g0
         self.w: dict[str, dict[str, float]] = {}
         self.g: dict[str, dict[str, float]] = {}
         self.seen = 0
@@ -122,7 +123,7 @@ class LinearExpert(Expert):
             go = self.g.setdefault(o, {})
             for f, v in x.sparse.items():
                 gi = grad * v + self.l2 * wo.get(f, 0.0)
-                acc = min(go.get(f, 0.0) + gi * gi, self.g_cap)
+                acc = min(go.get(f, getattr(self, "g0", 0.0)) + gi * gi, self.g_cap)
                 go[f] = acc
                 wo[f] = wo.get(f, 0.0) - self.lr * gi / (math.sqrt(acc) + 1e-8)
         self.seen += 1

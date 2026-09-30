@@ -189,3 +189,18 @@ def test_teacher_endpoints_without_teacher(client):
 def test_dashboard_served(client):
     assert "Desic" in client.get("/").text
     assert client.get("/static/app.js").status_code == 200
+
+
+def test_short_text_rows_train_as_plain_text(client):
+    """Regression (first user trial): short messages became {"state": ...} objects in
+    training while the same message arrives as plain text at decision time."""
+    rows = [{"state": "Kargom nerede?", "answer": "kargo"}, {"state": "Faturamı gönderir misiniz", "answer": "fatura"}] * 10
+    import json as _json
+    ds = client.post("/v1/datasets", files={"file": ("s.json", _json.dumps(rows).encode())}).json()
+    job = wait_job(client, client.post(f"/v1/datasets/{ds['id']}/train",
+                                       json={"task": "route", "answer_column": "answer", "holdout": 0}).json()["id"])
+    assert job["status"] == "done", job
+    r = client.post("/v1/decide", json={"state": "Kargom nerede?", "questions": {"route": {}}, "explain": True}).json()
+    exp = r["answers"]["route"]["explanation"]
+    assert exp["memory"] == {"exact_match": True}
+    assert exp["experts"]["tree"]["awake"] is False

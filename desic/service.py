@@ -679,8 +679,10 @@ class Desic:
             value = r.get(answer_col)
             if value in (None, ""):
                 continue
-            if mode == "text" or (mode == "auto" and len(state_cols) == 1 and not isinstance(r.get(state_cols[0]), (dict, list))
-                                  and len(str(r.get(state_cols[0], ""))) > 40):
+            single = r.get(state_cols[0]) if len(state_cols) == 1 else None
+            # one text column stays plain text whatever its length, so a short message is
+            # represented the same way in training and at decision time
+            if mode == "text" or (mode == "auto" and isinstance(single, str) and to_number(single) is None):
                 state: Any = " \n".join(str(r.get(c, "")) for c in state_cols if r.get(c) not in (None, ""))
             elif mode == "auto" and len(state_cols) == 1 and isinstance(r.get(state_cols[0]), (dict, list)):
                 state = r.get(state_cols[0])

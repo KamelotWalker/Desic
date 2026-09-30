@@ -227,3 +227,33 @@ def test_simplify_conditions():
     ])
     assert {"feature": "x", "op": "<=", "value": 3} in out
     assert {"feature": "c", "op": "not_in", "value": ["a", "b"]} in out
+
+
+@pytest.mark.xfail(strict=True, reason="known: AdaGrad's first step ignores the gradient size; fix pending the lr/g0 sweep")
+def test_one_uncertain_teacher_label_does_not_create_certainty():
+    """Regression (first user trial): a 55% teacher label made the student 94% sure,
+    and spilled over to unrelated messages sharing one word."""
+    rng = random.Random(1)
+    t = trained("urgent", {"type": "noul", "instructions": "needs a response today"},
+                [(s, str(u)) for s, _, u in (ticket(rng) for _ in range(600))])
+    s = "Merhaba, erken rezervasyon yaptırmak istiyorum"
+    t.learn(s, {"true": 0.549, "false": 0.451}, source="teacher")
+    assert t.public(t.answer(s))["probability"] < 0.75
+    assert t.public(t.answer("Rezervasyonumu iptal etmek istiyorum"))["probability"] < 0.6
+
+
+def test_a_human_correction_still_sticks():
+    rng = random.Random(1)
+    t = trained("urgent", {"type": "noul", "instructions": "needs a response today"},
+                [(s, str(u)) for s, _, u in (ticket(rng) for _ in range(600))])
+    s = "Merhaba, erken rezervasyon yaptırmak istiyorum"
+    t.learn(s, "true")
+    assert t.public(t.answer(s))["answer"] is True
+
+
+def test_unfamiliar_states_abstain_even_when_confident():
+    rng = random.Random(6)
+    t = trained("department", DEPT, [ticket(rng)[:2] for _ in range(300)])
+    a = t.answer("refund zorunlu yoksa mahkemeye başvuracağız avukatımız hazır bekliyor")
+    assert a["familiarity"] < 0.5 and a["unfamiliar"]
+    assert t.public(a)["abstain"] is True

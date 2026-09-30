@@ -214,11 +214,12 @@ class DecisionTask:
         familiarity = self.familiarity(feats) if preds["memory"] is None or key not in self.memory.exact else 1.0
         # A *pretrained* neural encoder understands words the online experts never saw, so
         # it lifts the familiarity shrink; a scratch encoder only knows what the labels taught it.
-        if familiarity < FAMILIAR and not (preds.get("neural") is not None and getattr(self, "_neural_pretrained", False)):
+        unfamiliar = familiarity < FAMILIAR and not (preds.get("neural") is not None and getattr(self, "_neural_pretrained", False))
+        if unfamiliar:
             lam = familiarity / FAMILIAR
             probs = {o: lam * p + (1 - lam) / len(opts) for o, p in probs.items()}
         return {"raw": raw, "probabilities": probs, "weights": weights, "preds": preds, "feats": feats, "key": key,
-                "options": opts, "familiarity": familiarity, "act": act}
+                "options": opts, "familiarity": familiarity, "unfamiliar": unfamiliar, "act": act}
 
     def familiarity(self, feats: Features) -> float:
         """Share of the state's evidence (words, categories) the student has seen in labelled data."""
@@ -249,7 +250,9 @@ class DecisionTask:
             p = probs.get("true", 0.5)
             out.update(probability=round(p, 4), answer=p >= 0.5)
         out["confidence"] = round(conf, 4)
-        out["abstain"] = (not knows) or conf < threshold
+        # Most of the evidence is new to the student: whatever the (shrunk) confidence says,
+        # this is a question for the teacher or a human.
+        out["abstain"] = (not knows) or conf < threshold or bool(internal.get("unfamiliar"))
         return out
 
     def explain(self, internal: dict) -> dict:

@@ -23,12 +23,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .core.features import state_hash as state_hash_of
 from .core.features import state_text
 from .core.rules import first_match, validate_rule
 from .core.schema import to_label, to_number
 from .core.task import CHOICE, NOUL, SCORE, DecisionTask, QuestionSpec, SpecError
 from .generation import design_task, generate_examples, normalize_design
 from .llm import LLMError, ProviderConfig, make_provider, teacher_answer
+from .neural.runtime import NeuralError, NeuralManager
+from .neural.text import question_text, state_to_text
 from .storage import Storage
 
 SAVE_EVERY = 20          # persist a task after this many changes
@@ -105,6 +108,22 @@ class Desic:
         self.teacher_stats = {"calls": 0, "errors": 0, "last_error": None, "last_call": None}
         self._provider = None
         self._background: set[asyncio.Task] = set()
+        self.neural = NeuralManager(None if str(data_dir) == ":memory:" else Path(data_dir), self.storage)
+        self.attach_neural()
+
+    # ------------------------------------------------------------ neural hook
+    def _neural_predict(self, spec: QuestionSpec, state: Any, options: list[str]):
+        return self.neural.predict(spec, state, options)
+
+    def attach_neural(self, reset: bool = False, task: DecisionTask | None = None) -> None:
+        """Plug the active neural checkpoint into every student (or unplug it)."""
+        fn = self._neural_predict if self.neural.active_id else None
+        pretrained = self.neural.active_pretrained
+        for t in [task] if task is not None else list(self.tasks.values()):
+            with self.lock(t.spec.name):
+                if reset:
+                    t.mixture.logw.pop("neural", None)
+                t.attach_neural(fn, pretrained=pretrained)
 
     # ------------------------------------------------------------- utilities
     def lock(self, name: str) -> threading.RLock:
@@ -151,6 +170,7 @@ class Desic:
             raise Conflict(f"question {spec.name!r} already exists")
         task = DecisionTask(spec, settings)
         self.tasks[spec.name] = task
+        self.attach_neural(task=task)
         self.persist(task)
         self.bus.publish({"type": "task_created", "task": spec.name})
         return task
@@ -214,6 +234,7 @@ class Desic:
             fresh = DecisionTask(copy.deepcopy(old.spec), dict(old.settings))
             fresh.rules = old.rules
             self.tasks[name] = fresh
+        self.attach_neural(task=fresh)
         self.persist(fresh)
         self.bus.publish({"type": "task_reset", "task": name})
 
@@ -363,12 +384,15 @@ class Desic:
             self.storage.add_event(name, d["state"], label, source, 1.0, decision_id)
             self.storage.set_answer_label(decision_id, name, label)
             self._touch(task)
+            self._shadow_observe(task, d["state"], stored.get("options") or task.spec.option_names, label,
+                                 student.get("probabilities") or {})
             for ev in events:
                 self.bus.publish({"type": "drift", "task": name, "event": ev})
             self.bus.publish({"type": "feedback", "task": name, "decision_id": decision_id, "label": label, "correct": correct,
                               "metrics": _brief(metrics), "point": task.metrics.history[-1] if task.metrics.history else None})
             out[name] = {"label": label, "correct": correct,
                          "student_correct": student.get("answer") == label, "metrics": _brief(metrics)}
+        self._maybe_auto_train()
         return {"decision_id": decision_id, "answers": out}
 
     def learn(self, name: str, examples: list[dict], source: str = "dataset", record: bool = True) -> dict:
@@ -377,6 +401,9 @@ class Desic:
         n = skipped = 0
         rows = []
         events: list[dict] = []
+        if self.neural.active_id:  # one batched forward pass instead of one per example
+            self.neural.prefetch(task.spec, [ex.get("state") for ex in examples if ex.get("state") not in (None, "")],
+                                 task.spec.option_names)
         with self.lock(name):
             for ex in examples:
                 state = ex.get("state")
@@ -440,6 +467,7 @@ class Desic:
             raise NotFound(f"snapshot {version} of {name!r} not found")
         with self.lock(name):
             self.tasks[name] = restored
+        self.attach_neural(task=restored)
         self.persist(restored)
         self.bus.publish({"type": "task_reset", "task": name})
         return self.task_detail(name)
@@ -459,6 +487,7 @@ class Desic:
             events = [e for e in self.storage.iter_events(name) if e["source"] not in exclude]
             fresh = DecisionTask(copy.deepcopy(old.spec), dict(old.settings))
             fresh.rules = old.rules
+            self.attach_neural(task=fresh)
 
             def replay(chunk: list[dict]) -> None:
                 for e in chunk:
@@ -472,6 +501,7 @@ class Desic:
             self.snapshot(name, note="before rebuild")
             with self.lock(name):
                 self.tasks[name] = fresh
+            self.attach_neural(task=fresh)
             self.persist(fresh)
             self.bus.publish({"type": "task_reset", "task": name})
             self.update_job(job, status="done", progress=1.0, message="rebuild finished",
@@ -504,6 +534,121 @@ class Desic:
         t0 = time.time()
         dist, rationale = await teacher_answer(self.provider(), "Hello there, nice to meet you!", spec)
         return {"ok": True, "p_true": round(dist["true"], 3), "rationale": rationale, "latency_ms": round((time.time() - t0) * 1000)}
+
+    # ------------------------------------------------------------ neural student
+    def _shadow_observe(self, task: DecisionTask, state: Any, options: list[str], label: str, served: dict) -> None:
+        if not self.neural.shadow_id:
+            return
+        ck = self.neural.shadow_id
+        try:
+            outcome = self.neural.observe(task.spec, state, options, label, served)
+        except Exception as e:  # never let the shadow break feedback
+            self.bus.publish({"type": "neural_error", "error": str(e)[:300]})
+            return
+        if outcome == "promoted":
+            self.attach_neural(reset=True)
+        if outcome:
+            self.bus.publish({"type": "neural_updated", "checkpoint": ck, "outcome": outcome})
+
+    def neural_examples(self) -> list:
+        """The training set: every non-retracted label in the log, one per (question, state).
+
+        Priority when a state was labelled more than once: human > system/dataset > teacher,
+        and the most recent label within the same priority wins.
+        """
+        from .neural.train import Example
+
+        rank = {"human": 3, "system": 2, "dataset": 2, "teacher": 1}
+        tw = float(self.neural.config["teacher_weight"])
+        best: dict[str, tuple[int, Any]] = {}
+        for name, task in self.tasks.items():
+            spec = task.spec
+            first = question_text(spec.type, spec.instructions or spec.name, spec.options)
+            options = spec.option_names
+            for e in self.storage.iter_events(name):
+                label = e["label"]
+                if isinstance(label, dict):
+                    target = [float(label.get(o, 0.0)) for o in options]
+                elif label in spec.options:
+                    target = [1.0 if o == label else 0.0 for o in options]
+                else:
+                    continue
+                total = sum(target)
+                if total <= 0:
+                    continue
+                target = [v / total for v in target]
+                key = name + ":" + state_hash_of(e["state"])
+                r = rank.get(e["source"], 1)
+                if key in best and best[key][0] > r:
+                    continue
+                weight = tw if e["source"] == "teacher" else 1.0
+                best[key] = (r, Example(name, spec.type, first, state_to_text(e["state"]), options, target, weight,
+                                        e["source"], key))
+        return [ex for _, ex in best.values()]
+
+    async def train_neural(self, job: Job) -> None:
+        loop = asyncio.get_running_loop()
+
+        def progress(frac: float, msg: str) -> None:
+            loop.call_soon_threadsafe(lambda: self.update_job(job, progress=round(frac, 4), message=msg))
+
+        self.neural.training = {"job": job.id, "started": time.time()}
+        self.bus.publish({"type": "neural_updated"})
+        try:
+            self.storage.set_setting("neural_last_train_labels", sum(t.labels for t in self.tasks.values()))
+            examples = await asyncio.to_thread(self.neural_examples)
+            self.update_job(job, message=f"training on {len(examples)} labelled states")
+            ck = await asyncio.to_thread(self.neural.train, examples, progress)
+            if ck["status"] == "active":
+                self.attach_neural(reset=True)
+            self.update_job(job, status="done", progress=1.0, message=f"checkpoint {ck['id']}: {ck['status']}",
+                            result={"checkpoint": ck["id"], "status": ck["status"], "note": ck["note"],
+                                    "test": ck["report"]["test"]["overall"]})
+        except Exception as e:
+            self.update_job(job, status="error", error=str(e) or type(e).__name__)
+        finally:
+            self.neural.training = None
+            self.bus.publish({"type": "neural_updated"})
+
+    def start_neural_training(self) -> Job:
+        if not self.neural.ok:
+            raise NeuralError(self.neural.reason)
+        if self.neural.training:
+            raise Conflict("a neural training job is already running")
+        job = self.new_job("neural", "preparing neural training")
+        self.spawn(self.train_neural(job))
+        return job
+
+    def _maybe_auto_train(self) -> None:
+        every = int(self.neural.config.get("auto_train_every", 0))
+        if every <= 0 or not self.neural.ok or self.neural.training:
+            return
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return  # called from a worker thread; the next feedback will check again
+        total = sum(t.labels for t in self.tasks.values())
+        if total - int(self.storage.get_setting("neural_last_train_labels", 0) or 0) >= every:
+            self.start_neural_training()
+
+    def neural_action(self, ck_id: str, action: str) -> dict:
+        try:
+            if action == "promote":
+                self.neural.promote(ck_id, note="promoted manually")
+                self.attach_neural(reset=True)
+            elif action in ("reject", "retire"):
+                was_active = self.neural.active_id == ck_id
+                self.neural.set_status(ck_id, "rejected" if action == "reject" else "retired", note=f"{action}ed manually")
+                if was_active:
+                    self.attach_neural()
+            elif action == "delete":
+                self.neural.delete(ck_id)
+            else:
+                raise ValueError(f"unknown action {action!r}")
+        except KeyError as e:
+            raise NotFound(str(e.args[0])) from None
+        self.bus.publish({"type": "neural_updated"})
+        return self.neural.status()
 
     # ---------------------------------------------------------------- datasets
     def add_dataset(self, name: str, source: str, columns: list[str], rows: list[dict], meta: dict | None = None) -> dict:

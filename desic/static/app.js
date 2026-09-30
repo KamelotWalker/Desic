@@ -183,13 +183,18 @@ function onEvent(ev) {
     case 'teacher_updated':
       if (isView('teacher')) viewTeacher();
       break;
+    case 'neural_updated':
+      if (isView('neural')) refreshNeuralSoon();
+      if (ev.outcome) toast(`Neural checkpoint ${ev.checkpoint} was ${ev.outcome} after its shadow test.`, ev.outcome === 'promoted' ? 'good' : 'warn', 7000);
+      if (isView('question')) refreshQuestionSoon();
+      break;
   }
 }
 
 function onJob(job) {
   const w = state.jobWatchers.get(job.id);
   if (w) w(job);
-  const label = { train: 'Training', distill: 'Distillation', generate: 'Generation', rebuild: 'Rebuild' }[job.kind] || job.kind;
+  const label = { train: 'Training', distill: 'Distillation', generate: 'Generation', rebuild: 'Rebuild', neural: 'Neural training' }[job.kind] || job.kind;
   if (job.status === 'done' && !w) toast(`${label} finished: ${job.message}`, 'good');
   if (job.status === 'error' && !w) toast(`${label} failed: ${job.error}`, 'error', 8000);
   if (job.status !== 'running') setTimeout(() => state.jobWatchers.delete(job.id), 1000);
@@ -226,6 +231,7 @@ function route() {
   if (section === 'data' && parts[1]) return viewDataset(parts[1]);
   if (section === 'data') return viewData();
   if (section === 'teacher') return viewTeacher();
+  if (section === 'neural') return viewNeural();
   return viewPlayground();
 }
 function mount(...kids) {
@@ -413,6 +419,9 @@ function explanationView(e) {
     parts.push(h('div', { class: 'small muted' }, e.memory.exact_match ? 'memory: this exact state was labelled before'
       : `memory: ${(e.memory.neighbours || []).map(n => `${n.answer} (sim ${dec(n.similarity, 2)})`).join(', ')}`));
   }
+  if (e.neural && e.neural.act != null) {
+    parts.push(h('div', { class: 'small muted' }, `neural act/escalate head: P(its top answer is right) = ${pct(e.neural.act)}`));
+  }
   parts.push(h('div', { class: 'small muted' }, `familiarity ${pct(e.familiarity)} of this state's evidence was seen in training`,
     e.familiarity < 0.5 ? ' — unfamiliar, so the answer is pulled toward “don’t know”' : '', ` · calibration temperature ${dec(e.temperature, 2)}`));
   return h('div', {}, parts);
@@ -579,7 +588,7 @@ function renderLive(q) {
     barRows(used.map(([n, v]) => [n, v / usedTotal]), pct, 1),
     idle.length ? h('div', { class: 'small muted' }, `not used: ${idle.join(', ')}${idle.includes('tree') ? ' (the states have no structured fields)' : ''}`) : null,
     h('p', { class: 'small muted', style: { marginTop: '8px' } },
-      `prior = base rates · linear = text/JSON evidence (${num(q.vocabulary)} features) · tree = thresholds on fields (${num(q.tree.nodes)} nodes) · memory = ${num(q.memory_size)} remembered examples, reacts instantly to corrections`))
+      `${q.neural_attached ? 'neural = Laya-style encoder (see the Neural page) · ' : ''}prior = base rates · linear = text/JSON evidence (${num(q.vocabulary)} features) · tree = thresholds on fields (${num(q.tree.nodes)} nodes) · memory = ${num(q.memory_size)} remembered examples, reacts instantly to corrections`))
     : h('div', { class: 'empty' }, 'No experts yet.'));
 }
 
@@ -1071,6 +1080,156 @@ async function viewDataset(id) {
         h('thead', {}, h('tr', {}, cols.map(c => h('th', {}, c)))),
         h('tbody', {}, ds.preview.map(r => h('tr', {}, cols.map(c => h('td', { class: 'small' }, clip(fmtVal(r[c]), 140))))))))));
   type.onchange = () => { levels.style.display = type.value === 'score' ? '' : 'none'; if (!levels.isConnected) instr.parentElement.after(levels); };
+}
+
+// ================================================================== neural
+const refreshNeuralSoon = debounce(() => { if (isView('neural')) viewNeural(); }, 400);
+const STATUS_BADGE = { active: 'good', shadow: 'warn', candidate: 'accent', rejected: 'bad', failed: 'bad' };
+
+async function viewNeural() {
+  state.view = { kind: 'neural' };
+  let st;
+  try { st = await api('GET', '/v1/neural'); } catch (e) { mount(h('div', { class: 'empty' }, e.message)); return; }
+  if (!isView('neural')) return;
+  const head = pageHead('Neural student', 'A Laya-style encoder with a decision head, trained from the feedback log. A candidate must pass an offline test and a live shadow test before it joins the students as the “neural” expert.');
+  if (!st.available) {
+    mount(head, h('div', { class: 'panel' }, h('h2', {}, 'PyTorch is not installed'), h('p', {}, st.reason),
+      h('pre', {}, "pip install -e '.[neural]'"), h('p', { class: 'small muted' }, 'Everything else in Desic keeps working without it.')));
+    return;
+  }
+  const cks = st.checkpoints.filter(c => c.status !== 'deleted');
+  const active = cks.find(c => c.status === 'active');
+  const shadow = cks.find(c => c.status === 'shadow');
+  const kpi = (k, v, d) => h('div', { class: 'kpi' }, h('div', { class: 'k' }, k), h('div', { class: 'v' }, v), h('div', { class: 'd' }, d));
+  const test = c => (c && c.report.test && c.report.test.overall) || {};
+  const sh = c => (c && c.shadow && c.shadow.n) ? c.shadow : null;
+  const kpis = h('div', { class: 'kpis' },
+    kpi('Active checkpoint', active ? active.id.slice(-11) : 'none', active ? `test accuracy ${pct(test(active).accuracy)} · log loss ${dec(test(active).nll, 3)}` : 'students run on the online experts only'),
+    kpi('In shadow', shadow ? shadow.id.slice(-11) : 'none', shadow ? (sh(shadow) ? `${sh(shadow).n}/${st.config.shadow_min} labels · log loss ${dec(sh(shadow).nll / sh(shadow).n, 3)} vs live ${dec(sh(shadow).live_nll / sh(shadow).n, 3)}` : `waiting for ${st.config.shadow_min} labelled decisions`) : '—'),
+    kpi('Training', st.training ? 'running' : 'idle', st.config.auto_train_every ? `automatic every ${num(st.config.auto_train_every)} new labels` : 'manual'),
+    kpi('Backbone', st.config.backbone === 'scratch' ? 'built-in' : st.config.backbone.split('/').pop(), `objective ${st.config.objective.toUpperCase()} · ${st.config.epochs} epochs`));
+
+  const jobSlot = h('div');
+  const trainBtn = h('button', { class: 'primary', disabled: !!st.training }, 'Train a candidate now');
+  trainBtn.onclick = () => guard(trainBtn, async () => {
+    const panel = jobPanel((j, out) => out.replaceChildren(h('p', { class: 'done' }, `Checkpoint ${j.result.checkpoint}: ${j.result.status}. ${j.result.note || ''}`)));
+    jobSlot.replaceChildren(panel.el);
+    panel.watch(await api('POST', '/v1/neural/train'));
+  });
+  if (st.training) {
+    const panel = jobPanel(() => {});
+    jobSlot.replaceChildren(panel.el);
+    panel.watch({ id: st.training.job });
+  }
+  const cancel = st.training ? h('button', { onclick: e => guard(e.currentTarget, () => api('POST', '/v1/neural/cancel')) }, 'Cancel') : null;
+
+  mount(head, kpis,
+    h('div', { class: 'grid-2' },
+      neuralSettings(st),
+      h('div', { class: 'panel' }, h('h2', {}, 'Pipeline'),
+        h('ol', { class: 'small', style: { paddingLeft: '18px' } },
+          h('li', {}, h('strong', {}, 'Dataset'), ' — every non-retracted label in the feedback log, one per (question, state); human > dataset > teacher. Teacher probabilities are soft targets (distillation).'),
+          h('li', {}, h('strong', {}, 'Train'), ' — encoder + 2-layer decision transformer; each answer is scored at its own [MASK] marker, so questions can bring new answers. Loss: log score (+ RPS for score questions) + act/escalate head; optional RLCD stage.'),
+          h('li', {}, h('strong', {}, 'Calibrate'), ' — one temperature per question on a validation slice.'),
+          h('li', {}, h('strong', {}, 'Offline gate'), ' — on a hash-stable test slice no checkpoint ever trains on: must beat the base rates and not lose to the active checkpoint.'),
+          h('li', {}, h('strong', {}, 'Shadow'), ` — predicts on the next ${st.config.shadow_min} labelled decisions without being served; promoted if its log loss is within ${st.config.promote_margin} of what users are served.`),
+          h('li', {}, h('strong', {}, 'Active'), ' — joins every question’s mixture as the “neural” expert; Hedge decides how much to trust it per question, and it can be retired at any time.')),
+        h('div', { class: 'row' }, trainBtn, cancel), jobSlot)),
+    h('div', { class: 'panel', style: { marginTop: '16px' } }, h('h2', {}, 'Checkpoints'),
+      cks.length ? checkpointTable(cks) : h('div', { class: 'empty' }, 'No checkpoints yet. Train one once your questions have some labels.')));
+}
+
+function neuralSettings(st) {
+  const c = st.config;
+  const known = Object.keys(st.backbones);
+  const bb = h('select', {}, [...known.map(k => h('option', { value: k, selected: k === c.backbone }, st.backbones[k])),
+    h('option', { value: '__custom', selected: !known.includes(c.backbone) }, 'Other Hugging Face encoder / local path…')]);
+  const custom = h('input', { value: known.includes(c.backbone) ? '' : c.backbone, placeholder: 'e.g. dbmdz/bert-base-turkish-cased or /models/my-encoder' });
+  const customField = h('label', { class: 'field' }, h('span', {}, 'Encoder id or path'), custom);
+  const sync = () => { customField.style.display = bb.value === '__custom' ? '' : 'none'; };
+  bb.onchange = sync; sync();
+  const f = (label, key, attrs = {}) => {
+    const el = h('input', { value: c[key], ...attrs });
+    el.dataset.key = key;
+    return h('label', { class: 'field' }, h('span', {}, label), el);
+  };
+  const objective = h('select', {}, [['ce', 'Cross-entropy (log score) — stable'], ['rlcd', 'RLCD-style: noisy logits + REINFORCE']].map(([v, l]) => h('option', { value: v, selected: v === c.objective }, l)));
+  const autoPromote = h('input', { type: 'checkbox', checked: c.auto_promote });
+  const initActive = h('input', { type: 'checkbox', checked: c.init_from_active });
+  const fields = h('div', { class: 'form-grid' },
+    f('Max tokens', 'max_len', { type: 'number', min: 32, max: 8192 }), f('Epochs', 'epochs', { type: 'number', min: 1, max: 100 }),
+    f('Batch size', 'batch_size', { type: 'number', min: 1, max: 512 }), f('Encoder learning rate', 'lr_backbone', { type: 'number', step: 'any' }),
+    f('Head learning rate', 'lr_head', { type: 'number', step: 'any' }), f('Teacher label weight', 'teacher_weight', { type: 'number', step: 0.05, min: 0, max: 1 }),
+    f('Auto-train every N labels (0 = off)', 'auto_train_every', { type: 'number', min: 0 }), f('Shadow labels before promotion', 'shadow_min', { type: 'number', min: 0 }),
+    f('Promotion margin (log loss)', 'promote_margin', { type: 'number', step: 0.01, min: 0 }), f('Device', 'device', { placeholder: 'auto, cpu, cuda, mps' }));
+  const save = h('button', {}, 'Save settings');
+  save.onclick = () => guard(save, async () => {
+    const patch = { backbone: bb.value === '__custom' ? custom.value.trim() : bb.value, objective: objective.value,
+      auto_promote: autoPromote.checked, init_from_active: initActive.checked };
+    fields.querySelectorAll('input[data-key]').forEach(i => { patch[i.dataset.key] = i.type === 'number' ? Number(i.value) : i.value; });
+    await api('PATCH', '/v1/neural/config', patch);
+    toast('Neural settings saved', 'good'); viewNeural();
+  });
+  return h('div', { class: 'panel' }, h('h2', {}, 'Training settings'),
+    h('label', { class: 'field' }, h('span', {}, 'Backbone'), bb), customField,
+    h('p', { class: 'small muted' }, 'Pretrained encoders (ModernBERT, mmBERT) are downloaded from Hugging Face on first use and want a GPU; the built-in encoder trains from zero on CPU in seconds but only knows what your labels teach it. For Turkish, mmBERT is the Laya-multilingual choice.'),
+    h('label', { class: 'field' }, h('span', {}, 'Objective'), objective), fields,
+    h('label', { class: 'check small' }, autoPromote, 'promote automatically after a successful shadow test'),
+    h('label', { class: 'check small', style: { marginLeft: '12px' } }, initActive, 'continue from the active checkpoint when the backbone matches'),
+    h('div', { style: { marginTop: '10px' } }, save));
+}
+
+function checkpointTable(cks) {
+  const t = c => c.report.test && c.report.test.overall || {};
+  const body = h('tbody');
+  for (const c of cks) {
+    const r = c.report, sh = c.shadow && c.shadow.n ? c.shadow : null;
+    const act = (label, action, cls = 'sm') => h('button', { class: cls, onclick: e => { e.stopPropagation(); guard(e.currentTarget, async () => {
+      if (action === 'delete' && !confirm(`Delete checkpoint ${c.id} from disk?`)) return;
+      await api('POST', `/v1/neural/checkpoints/${enc(c.id)}/${action}`); viewNeural();
+    }); } }, label);
+    const actions = [];
+    if (c.status === 'shadow' || c.status === 'rejected' || c.status === 'retired' || c.status === 'candidate') actions.push(act('Promote', 'promote', 'sm'));
+    if (c.status === 'shadow') actions.push(act('Reject', 'reject', 'sm danger'));
+    if (c.status === 'active') actions.push(act('Retire', 'retire', 'sm danger'));
+    if (c.status === 'rejected' || c.status === 'retired') actions.push(act('Delete', 'delete', 'sm ghost'));
+    const detail = h('tr', { style: { display: 'none' } }, h('td', { colspan: 9 }, checkpointDetail(c)));
+    const row = h('tr', { class: 'clickable', onclick: () => { detail.style.display = detail.style.display === 'none' ? '' : 'none'; } },
+      h('td', {}, h('code', {}, c.id), h('div', { class: 'small muted' }, ago(c.created_at))),
+      h('td', {}, h('span', { class: `badge ${STATUS_BADGE[c.status] || ''}` }, c.status)),
+      h('td', { class: 'small' }, c.backbone === 'scratch' ? 'built-in' : c.backbone.split('/').pop(), h('div', { class: 'muted' }, r.init || '')),
+      h('td', { class: 'num' }, num(r.train && r.train.examples)),
+      h('td', { class: 'num' }, pct(t(c).accuracy)),
+      h('td', { class: 'num', title: 'test log loss · base rates · previous active' }, dec(t(c).nll, 3),
+        h('div', { class: 'small muted' }, `prior ${dec(r.prior && r.prior.nll, 3)}${r.baseline ? ` · prev ${dec(r.baseline.overall && r.baseline.overall.nll, 3)}` : ''}`)),
+      h('td', { class: 'num' }, dec(t(c).ece, 3)),
+      h('td', { class: 'small' }, sh ? `${sh.n} labels: ${dec(sh.nll / sh.n, 3)} vs live ${dec(sh.live_nll / sh.n, 3)}` : '—'),
+      h('td', {}, h('div', { class: 'row' }, actions)));
+    body.append(row, detail);
+  }
+  return h('div', { class: 'table-wrap' }, h('table', {},
+    h('thead', {}, h('tr', {}, ['Checkpoint', 'Status', 'Backbone', 'Examples', 'Test acc.', 'Test log loss', 'ECE', 'Shadow', ''].map((x, i) =>
+      h('th', { class: [3, 4, 5, 6].includes(i) ? 'num' : '' }, x)))), body),
+    h('p', { class: 'small muted' }, 'Click a row for per-question results, the training curve and temperatures.'));
+}
+
+function checkpointDetail(c) {
+  const r = c.report;
+  const tasks = Object.entries((r.test && r.test.tasks) || {});
+  const hist = (r.train && r.train.history) || [];
+  return h('div', { class: 'grid-2', style: { padding: '8px 0' } },
+    h('div', {},
+      c.note ? h('p', { class: 'note' }, c.note) : null,
+      tasks.length ? h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Question'), h('th', { class: 'num' }, 'n'), h('th', { class: 'num' }, 'Accuracy'),
+        h('th', { class: 'num' }, 'Log loss'), h('th', { class: 'num' }, 'ECE'), h('th', { class: 'num' }, 'T'))),
+        h('tbody', {}, tasks.map(([name, m]) => h('tr', {}, h('td', {}, h('a', { href: `#/questions/${enc(name)}` }, name)),
+          h('td', { class: 'num' }, num(m.n)), h('td', { class: 'num' }, pct(m.accuracy)), h('td', { class: 'num' }, dec(m.nll, 3)),
+          h('td', { class: 'num' }, dec(m.ece, 3)), h('td', { class: 'num' }, dec((r.temperatures || {})[name], 2))))))
+        : h('div', { class: 'small muted' }, 'No labelled test examples.')),
+    h('div', {},
+      h('h3', {}, 'Training'),
+      h('div', { class: 'small muted' }, hist.map(x => `epoch ${x.epoch}: train ${dec(x.train_loss, 3)} · val ${dec(x.val_nll, 3)}`).join('  ·  ')),
+      h('div', { class: 'small muted' }, r.train ? `${num(r.train.examples)} train / ${num(r.train.val)} val / ${num(r.train.test)} test · ${r.train.seconds}s on ${r.train.device} · objective ${r.train.objective}` : '')));
 }
 
 // ================================================================== teacher

@@ -27,6 +27,7 @@ from . import __version__
 from .core.task import CHOICE, QuestionSpec, SpecError
 from .datasets import DatasetError, parse_dataset
 from .llm import PROVIDERS, LLMError, ProviderConfig
+from .neural.runtime import NeuralError
 from .service import Conflict, Desic, NotFound
 
 STATIC = Path(__file__).parent / "static"
@@ -158,11 +159,15 @@ def create_app(data_dir: str | None = None, teacher: ProviderConfig | None = Non
     async def _le(_, e: LLMError):
         return JSONResponse({"detail": str(e)}, status_code=502)
 
+    @app.exception_handler(NeuralError)
+    async def _ne(_, e: NeuralError):
+        return JSONResponse({"detail": str(e)}, status_code=503)
+
     # ------------------------------------------------------------- decisions
     @app.get("/v1/health")
     async def health():
         return {"status": "ok", "version": __version__, "questions": len(svc().tasks),
-                "teacher": svc().teacher_cfg is not None}
+                "teacher": svc().teacher_cfg is not None, "neural": svc().neural.active_id}
 
     @app.post("/v1/decide")
     async def decide(body: DecideIn):
@@ -272,6 +277,29 @@ def create_app(data_dir: str | None = None, teacher: ProviderConfig | None = Non
     @app.post("/v1/teacher/test")
     async def test_teacher():
         return await svc().test_teacher()
+
+    # ---------------------------------------------------------------- neural
+    @app.get("/v1/neural")
+    async def neural_status():
+        return svc().neural.status()
+
+    @app.patch("/v1/neural/config")
+    async def neural_config(body: dict[str, Any]):
+        svc().neural.set_config(body)
+        return svc().neural.status()
+
+    @app.post("/v1/neural/train", status_code=202)
+    async def neural_train():
+        return svc().start_neural_training().to_dict()
+
+    @app.post("/v1/neural/cancel")
+    async def neural_cancel():
+        svc().neural.cancel = True
+        return {"cancelling": bool(svc().neural.training)}
+
+    @app.post("/v1/neural/checkpoints/{ck_id}/{action}")
+    async def neural_checkpoint(ck_id: str, action: str):
+        return await anyio.to_thread.run_sync(svc().neural_action, ck_id, action)
 
     # -------------------------------------------------------------- datasets
     @app.get("/v1/datasets")

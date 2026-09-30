@@ -69,6 +69,20 @@ CREATE TABLE IF NOT EXISTS feedback_events (
     retracted   INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_events_task ON feedback_events(task, id);
+CREATE TABLE IF NOT EXISTS neural_checkpoints (
+    id         TEXT PRIMARY KEY,
+    created_at REAL NOT NULL,
+    status     TEXT NOT NULL,
+    backbone   TEXT NOT NULL,
+    path       TEXT NOT NULL,
+    report     TEXT NOT NULL DEFAULT '{}',
+    shadow     TEXT NOT NULL DEFAULT '{}',
+    note       TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS datasets (
     id         TEXT PRIMARY KEY,
     name       TEXT NOT NULL,
@@ -259,6 +273,48 @@ class Storage:
             key = "retracted" if r["retracted"] else r["source"]
             out[key] = out.get(key, 0) + r["n"]
         return out
+
+    # ---------------------------------------------------------------- settings
+    def get_setting(self, key: str, default: Any = None) -> Any:
+        r = self._one("SELECT value FROM settings WHERE key=?", (key,))
+        return json.loads(r["value"]) if r else default
+
+    def set_setting(self, key: str, value: Any) -> None:
+        self._exec("INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                   (key, _dumps(value)))
+
+    # ------------------------------------------------------- neural checkpoints
+    def add_checkpoint(self, ck_id: str, status: str, backbone: str, path: str, report: dict, note: str = "") -> None:
+        self._exec("INSERT INTO neural_checkpoints(id, created_at, status, backbone, path, report, note) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                   (ck_id, time.time(), status, backbone, path, _dumps(report), note))
+
+    def update_checkpoint(self, ck_id: str, **fields: Any) -> None:
+        cols = []
+        vals: list[Any] = []
+        for k, v in fields.items():
+            if k not in ("status", "shadow", "note", "report"):
+                raise ValueError(k)
+            cols.append(f"{k}=?")
+            vals.append(_dumps(v) if k in ("shadow", "report") else v)
+        self._exec(f"UPDATE neural_checkpoints SET {', '.join(cols)} WHERE id=?", (*vals, ck_id))
+
+    @staticmethod
+    def _checkpoint(r: sqlite3.Row) -> dict:
+        d = dict(r)
+        d["report"] = json.loads(d["report"])
+        d["shadow"] = json.loads(d["shadow"])
+        return d
+
+    def list_checkpoints(self) -> list[dict]:
+        return [self._checkpoint(r) for r in self._all("SELECT * FROM neural_checkpoints ORDER BY created_at DESC")]
+
+    def get_checkpoint(self, ck_id: str) -> dict | None:
+        r = self._one("SELECT * FROM neural_checkpoints WHERE id=?", (ck_id,))
+        return self._checkpoint(r) if r else None
+
+    def checkpoint_with_status(self, status: str) -> dict | None:
+        r = self._one("SELECT * FROM neural_checkpoints WHERE status=? ORDER BY created_at DESC LIMIT 1", (status,))
+        return self._checkpoint(r) if r else None
 
     # ---------------------------------------------------------------- datasets
     def create_dataset(self, name: str, source: str, columns: list[str], rows: list[dict], meta: dict | None = None) -> str:

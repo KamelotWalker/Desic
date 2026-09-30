@@ -291,6 +291,13 @@ class Mixture:
         self.share = share
         self.logw = {n: 0.0 for n in names}
 
+    def add(self, name: str, share: float) -> None:
+        """Add an expert holding ``share`` of the total weight (the others keep their ratios)."""
+        share = min(max(share, 1e-3), 0.9)
+        m = max(self.logw.values())
+        total = math.log(sum(math.exp(v - m) for v in self.logw.values())) + m
+        self.logw[name] = total + math.log(share / (1 - share))
+
     def weights(self) -> dict[str, float]:
         m = max(self.logw.values())
         return normalize({n: math.exp(v - m) for n, v in self.logw.items()})

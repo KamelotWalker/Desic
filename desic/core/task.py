@@ -17,7 +17,7 @@ from __future__ import annotations
 import re
 import time
 from dataclasses import asdict, dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from .calibration import TaskMetrics, TemperatureCalibrator, confidence_of
 from .drift import DDM, DRIFT
@@ -147,6 +147,31 @@ class DecisionTask:
         self.version = 0
         self.rules: list[dict] = []
         self.created_at = time.time()
+        self._neural: Callable[..., tuple[Dist, float] | None] | None = None  # runtime hook, never pickled
+
+    # The neural student is a process-level resource: it is attached after
+    # loading and must not be pickled together with the task.
+    def __getstate__(self) -> dict:
+        state = dict(self.__dict__)
+        state["_neural"] = None
+        state["_neural_pretrained"] = False
+        return state
+
+    def __setstate__(self, state: dict) -> None:
+        self.__dict__.update(state)
+        self.__dict__.setdefault("_neural", None)
+
+    def attach_neural(self, fn: Callable[..., tuple[Dist, float] | None] | None, share: float = 0.3,
+                      pretrained: bool = False) -> None:
+        """Plug in (or with ``None`` unplug) the neural expert; a new expert starts with ``share`` of the weight.
+
+        ``pretrained`` says whether its encoder brings language knowledge of its own
+        (ModernBERT, mmBERT …) rather than only what the labels taught it.
+        """
+        self._neural = fn
+        self._neural_pretrained = pretrained
+        if fn is not None and "neural" not in self.mixture.logw:
+            self.mixture.add("neural", share)
 
     @property
     def experts(self) -> dict:
@@ -156,28 +181,44 @@ class DecisionTask:
     def labels(self) -> int:
         return sum(self.labels_by_source.values())
 
-    def _predict_experts(self, feats: Features, key: str, options: list[str]) -> dict[str, Dist | None]:
-        return {
+    def _predict_experts(self, feats: Features, key: str, options: list[str], state: Any = None) -> dict[str, Dist | None]:
+        preds: dict[str, Dist | None] = {
             "prior": self.prior.predict(feats, options),
             "linear": self.linear.predict(feats, options),
             "tree": self.tree.predict(feats, options),
             "memory": self.memory.predict(feats, options, key),
         }
+        self._last_act = None
+        if self._neural is not None and state is not None:
+            try:
+                res = self._neural(self.spec, state, options)
+            except Exception:  # the neural student must never break a decision
+                res = None
+            if res is not None:
+                dist, act = res
+                preds["neural"] = {o: 0.99 * dist.get(o, 0.0) + 0.01 / len(options) for o in options}
+                self._last_act = act
+            else:
+                preds["neural"] = None
+        return preds
 
     # ----------------------------------------------------------------- answer
     def answer(self, state: Any, options: list[str] | None = None) -> dict:
         opts = [o for o in (options or self.spec.option_names) if o in self.spec.options] or self.spec.option_names
         feats = self.featurizer.extract(state)
         key = state_hash(state)
-        preds = self._predict_experts(feats, key, opts)
+        preds = self._predict_experts(feats, key, opts, state)
+        act = self._last_act
         raw, weights = self.mixture.combine(preds, opts)
         probs = self.calibrator.apply(raw)
         familiarity = self.familiarity(feats) if preds["memory"] is None or key not in self.memory.exact else 1.0
-        if familiarity < FAMILIAR:
+        # A *pretrained* neural encoder understands words the online experts never saw, so
+        # it lifts the familiarity shrink; a scratch encoder only knows what the labels taught it.
+        if familiarity < FAMILIAR and not (preds.get("neural") is not None and getattr(self, "_neural_pretrained", False)):
             lam = familiarity / FAMILIAR
             probs = {o: lam * p + (1 - lam) / len(opts) for o, p in probs.items()}
         return {"raw": raw, "probabilities": probs, "weights": weights, "preds": preds, "feats": feats, "key": key,
-                "options": opts, "familiarity": familiarity}
+                "options": opts, "familiarity": familiarity, "act": act}
 
     def familiarity(self, feats: Features) -> float:
         """Share of the state's evidence (words, categories) the student has seen in labelled data."""
@@ -232,6 +273,8 @@ class DecisionTask:
             out["memory"] = self.memory.explain(feats, opts, best, key)
         if internal["preds"]["prior"] is not None:
             out["prior"] = self.prior.explain(feats, opts, best)
+        if internal["preds"].get("neural") is not None:
+            out["neural"] = {"act": round(internal["act"], 3) if internal.get("act") is not None else None}
         return out
 
     # ------------------------------------------------------------------ learn
@@ -257,7 +300,7 @@ class DecisionTask:
         opts = self.spec.option_names
         feats = self.featurizer.extract(state)
         key = state_hash(state)
-        preds = self._predict_experts(feats, key, opts)
+        preds = self._predict_experts(feats, key, opts, state)
         events: list[dict] = []
 
         if source in GROUND_TRUTH_SOURCES and len(dist) == 1:
@@ -301,7 +344,9 @@ class DecisionTask:
             "version": self.version,
             "temperature": self.calibrator.t,
             "expert_weights": {k: round(v, 4) for k, v in self.mixture.weights().items()},
-            "expert_usage": {k: round(getattr(self, "awake_counts", {}).get(k, 0) / max(self.labels, 1), 4) for k in self.EXPERTS},
+            "expert_usage": {k: round(getattr(self, "awake_counts", {}).get(k, 0) / max(self.labels, 1), 4)
+                             for k in self.mixture.logw},
+            "neural_attached": self._neural is not None,
             "tree": self.tree.model.tree.stats(),
             "vocabulary": len({f for w in self.linear.w.values() for f in w}),
             "memory_size": len(self.memory),

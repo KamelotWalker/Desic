@@ -11,6 +11,7 @@ Jev ve Laya gibi Desic de serbest metin üretmez: bir `state` (metin veya JSON) 
                                      ▼                                                    │
                         sabit kurallar ──eşleşme yok──► ÖĞRENCİ (System 1)                │
                                                         prior · linear · tree · memory   │
+                                                        (+ neural: Laya tarzı encoder)   │
                                                         → Hedge karışımı → sıcaklık kalib.│
                                                         → tanıdıklık → güven / abstain    │
                                         abstain ise ──► ÖĞRETMEN (System 2): Claude,      │
@@ -43,6 +44,8 @@ DESIC_TEACHER_PROVIDER=openai DESIC_TEACHER_BASE_URL=https://api.openai.com/v1 \
 DESIC_TEACHER_MODEL=<model> DESIC_TEACHER_API_KEY=... desic serve
 DESIC_TEACHER_PROVIDER=jev_compatible DESIC_TEACHER_BASE_URL=http://localhost:9000/v1/decide desic serve  # ör. self-host Laya
 ```
+
+Nöral öğrenci (isteğe bağlı): `pip install -e '.[neural]'` → dashboard'da **Neural** sayfası.
 
 Docker: `docker build -t desic . && docker run -p 8000:8000 -v desic-data:/data desic`
 
@@ -96,6 +99,8 @@ curl -s -X POST localhost:8000/v1/feedback -H 'Content-Type: application/json' \
 | `GET/PUT/DELETE /v1/teacher` · `POST /v1/teacher/test` | öğretmen ayarı (anahtar sadece bellekte) |
 | `POST /v1/datasets` · `POST /v1/datasets/{id}/train` · `POST /v1/datasets/{id}/distill` | yükle · eğit · öğretmene etiketlet |
 | `POST /v1/generate/design` · `POST /v1/generate/examples` | LLM ile soru tasarla · örnek üret (+ eğit) |
+| `GET /v1/neural` · `PATCH /v1/neural/config` · `POST /v1/neural/train` | nöral öğrenci durumu · ayarlar · aday eğitimi |
+| `POST /v1/neural/checkpoints/{id}/{promote\|reject\|retire\|delete}` | checkpoint yaşam döngüsü |
 | `GET /v1/jobs/{id}` · `WS /ws` | arka plan işleri · canlı olaylar |
 
 Etkileşimli referans: `http://127.0.0.1:8000/docs`. Python içinden doğrudan: `desic.service.Desic`.
@@ -116,12 +121,31 @@ Saf Python, ek ML bağımlılığı yok. Her soru için ayrı bir öğrenci:
 | **Tanıdıklık** | State'teki kanıtın ne kadarı eğitimde görüldü? %50'nin altındaysa dağılım "bilmiyorum"a çekilir → çekimser kalır → öğretmene gider. |
 | **Ölçüm** | Prequential: her insan etiketi, kullanıcıya *gösterilmiş* olasılıklarla öğrenilmeden önce puanlanır. Accuracy, NLL, Brier, ECE, RPS (score), güvenilirlik diyagramı, risk–coverage, abstain ve öğretmen oranı. Öğretmen etiketleri metriğe girmez. |
 
+## Nöral öğrenci (Laya tarzı, `desic/neural`)
+
+Çevrimiçi uzmanlar **hızlı katman**: her geri bildirimden anında öğrenir. Nöral öğrenci **yavaş katman**: feedback log'dan periyodik olarak eğitilen, Laya mimarisinde bir encoder + decision head.
+
+```
+[CLS] choice: Which team? [MASK] billing: payments [MASK] technical: bugs [MASK] sales: pricing [SEP] <state> [SEP]
+        │ encoder (ModernBERT-large / mmBERT / herhangi bir HF encoder / yerleşik küçük encoder)
+        │ 2 katmanlı decision transformer
+        ├─ her [MASK] üzerinde option scorer → softmax → bu sorunun cevapları üzerinde dağılım
+        └─ [CLS] üzerinde act/escalate head → P(en üstteki cevap doğru)
+```
+
+- **Veri:** geri çekilmemiş tüm etiketler, (soru, state) başına bir tane; insan > dataset > öğretmen. Öğretmen olasılıkları yumuşak hedef (distillation).
+- **Kayıp:** log score (strictly proper) + sıralı sorular için RPS + act head; isteğe bağlı **RLCD tarzı** aşama (logitlere Gauss gürültüsü, grup örnekleme, log-score ödülü, grup-ortalama baseline ile REINFORCE). Encoder ve head için ayrı öğrenme hızları.
+- **Kalibrasyon:** doğrulama diliminde soru başına sıcaklık.
+- **Kapılar:** (1) *offline* — hiçbir checkpoint'in eğitilmediği, hash ile sabit test diliminde taban oranları yenmeli ve aktif checkpoint'e kaybetmemeli; (2) *gölge* — sonraki N etiketli kararda sunulmadan tahmin eder, log loss'u kullanıcılara sunulana yakınsa terfi eder. (3) *aktif* — her sorunun karışımına `neural` uzmanı olarak girer; Hedge ne kadar güvenileceğine soru bazında karar verir. İstendiğinde emekliye ayrılır.
+- **Backbone:** `scratch` (indirme yok, CPU'da saniyeler), `answerdotai/ModernBERT-large` (Laya İngilizce), `jhu-clsp/mmBERT-base` (Türkçe dahil 100+ dil), ya da herhangi bir HF encoder id / yerel yol. Önceden eğitilmiş encoder'lar ilk kullanımda Hugging Face'ten indirilir ve GPU ister.
+- **Güvenlik notu:** yerleşik (önceden eğitilmemiş) encoder, anlamsız bir metne bile %99 güven verebilir — nöral ağların klasik dağılım-dışı aşırı güveni. Bu yüzden "tanıdıklık" koruması yalnızca **önceden eğitilmiş** bir encoder aktifken gevşer.
+
 ### Jev / Laya ile karşılaştırma
 
 | | Jev | Laya | Desic |
 |---|---|---|---|
 | Arayüz | state + choice/score/noul | aynı | aynı (Jev istek biçimi) |
-| Model | kapalı, hosted | ModernBERT + decision head (421M) | çevrimiçi uzman karışımı (küçük, CPU, saf Python) |
+| Model | kapalı, hosted | ModernBERT + decision head (421M) | çevrimiçi uzman karışımı + isteğe bağlı Laya tarzı nöral öğrenci |
 | Sıfırdan (zero-shot) bilgi | güçlü | orta | yok: öğretmen + veri ile öğrenir |
 | Kullanıcı geri bildiriminden öğrenme | hayır (müşteri fine-tune yok) | offline fine-tune | **her geri bildirimde, anında** |
 | Kalibrasyon | RLCD | proper scoring + sıcaklık | log-loss Hedge + çevrimiçi sıcaklık + tanıdıklık |
@@ -141,13 +165,14 @@ Desic, Laya'yı (Jev-uyumlu bir sunucu arkasında) **öğretmen** olarak kullana
 
 ```bash
 pip install -e '.[dev]'
-pytest                      # 41 test: çekirdek, API, öğretmen/üretim (sahte sağlayıcılarla)
+pytest                      # 50 test: çekirdek, API, öğretmen/üretim, nöral öğrenci (torch yoksa atlanır)
 desic serve --reload
 ```
 
 ```
 desic/
   core/        features · experts · calibration · task · tree · model (adaptif ağaç) · drift · rules
+  neural/      text (girdi biçimi) · model (encoder + decision head) · train (kayıplar, RLCD, kalibrasyon) · runtime (kapılar)
   service.py   kararlar, feedback, öğretmen, işler, snapshot/rebuild
   llm.py       öğretmen sağlayıcıları (Anthropic SDK, OpenAI-uyumlu, Jev-uyumlu)
   generation.py  LLM ile soru tasarımı ve örnek üretimi
@@ -158,8 +183,8 @@ desic/
 
 ## Yol haritası
 
-- **Yavaş katman:** feedback log'dan periyodik olarak nöral bir öğrenci (ModernBERT/mmBERT + option-marker decision head, Laya tarzı) fine-tune etmek; aday → offline değerlendirme → gölge/kanarya → terfi. Mevcut çevrimiçi uzmanlar "hızlı katman" olarak kalır.
-- RLCD tarzı eğitim: gürültülü logit keşfi + proper scoring ödülü + grup-ortalama baseline.
+- Nöral öğrencide çok dilli yönlendirici (Laya Router gibi dile göre checkpoint seçimi) ve ONNX/quantization ile hızlı çıkarım.
+- Gölge testinde eşleştirilmiş istatistiksel test (şu an ortalama log loss + marj).
 - Multi-label ve sıralama (rank) primitive'leri, hiyerarşik choice (255+ seçenek).
 - Sıcak yolun (özellik çıkarma, uzman skorlama) C++/pybind11 ile hızlandırılması.
 - Kimlik doğrulama ve API anahtarları (şu an yerel/güvenilir ağ için; `desic serve` varsayılan olarak yalnızca `127.0.0.1`'i dinler).
@@ -170,6 +195,6 @@ desic/
 
 ### English summary
 
-Desic is a self-learning **typed-decision (System One) engine**: like Jev and Laya it takes a state plus typed questions (`choice`, `score`, `noul`) and returns calibrated probability distributions, never free text. Unlike them it learns from **every piece of feedback in real time** (a mixture of online experts — linear, Hoeffding tree, nearest-neighbour memory, prior — combined by log-loss Hedge with fixed share, then temperature-calibrated), **abstains** when unsure or when the input is unfamiliar, and can escalate to a **teacher** (Claude, any OpenAI-compatible LLM, or a Jev-compatible API such as a self-hosted Laya) whose answers are distilled back into the student. Feedback is an append-only log with retract / rebuild / snapshot / rollback. The dashboard shows ECE, Brier, NLL, reliability diagrams and risk–coverage curves. `pip install -e . && desic demo && desic serve`.
+Desic is a self-learning **typed-decision (System One) engine**: like Jev and Laya it takes a state plus typed questions (`choice`, `score`, `noul`) and returns calibrated probability distributions, never free text. Unlike them it learns from **every piece of feedback in real time** (a mixture of online experts — linear, Hoeffding tree, nearest-neighbour memory, prior — combined by log-loss Hedge with fixed share, then temperature-calibrated), optionally joined by a **Laya-style neural student** (encoder + option-marker decision head, trained from the feedback log with proper scoring / RLCD, gated offline and in shadow before promotion), **abstains** when unsure or when the input is unfamiliar, and can escalate to a **teacher** (Claude, any OpenAI-compatible LLM, or a Jev-compatible API such as a self-hosted Laya) whose answers are distilled back into the student. Feedback is an append-only log with retract / rebuild / snapshot / rollback. The dashboard shows ECE, Brier, NLL, reliability diagrams and risk–coverage curves. `pip install -e . && desic demo && desic serve`.
 
 MIT License.

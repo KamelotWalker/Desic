@@ -47,6 +47,12 @@ DESIC_TEACHER_PROVIDER=jev_compatible DESIC_TEACHER_BASE_URL=http://localhost:90
 
 Nöral öğrenci (isteğe bağlı): `pip install -e '.[neural]'` → dashboard'da **Neural** sayfası.
 
+### Bilgisayarsız: GitHub Codespaces (telefondan da çalışır)
+
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/KamelotWalker/Desic)
+
+Repo sayfasında **Code → Codespaces → Create codespace** (ya da yukarıdaki rozet). Kurulum, demo verisi ve sunucu `.devcontainer/devcontainer.json` ile otomatik başlar; 8000 portu **private** olarak yönlendirilir, yani adres yalnızca senin GitHub hesabınla açılır. Adres **Ports** sekmesinde görünür (`https://<codespace-adı>-8000.app.github.dev`). Kullanmadığında codespace'i durdur (ücretsiz kotadan yer).
+
 Docker: `docker build -t desic . && docker run -p 8000:8000 -v desic-data:/data desic`
 
 ## API (Jev istek biçimi)

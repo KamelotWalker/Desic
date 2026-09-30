@@ -175,6 +175,8 @@ Desic, Laya'yı (Jev-uyumlu bir sunucu arkasında) **öğretmen** olarak kullana
 
 Seçici tahmin (çevrimiçi öğrenci, tüm veri): yalnızca ≥%70 eminken cevap verirse sorunun %85,7'sine %95,1, ≥%90 eminken %73,3'üne %97,8 doğrulukla cevap veriyor.
 
+Tüm aşamaların ölçümleri, ham loglar ve JSON sonuçları: [`benchmarks/`](benchmarks/).
+
 Referans: yayınlanmış sonuçlarda (Casanueva ve ark., 2020) tam veriyle ince ayarlı BERT / ConveRT yaklaşık %93. Desic'in önceden eğitilmiş bir dil bilgisi yok; bu fark beklenen bir fark. Önceden eğitilmiş bir backbone (mmBERT / ModernBERT) ile nöral öğrenci GPU'da ayrıca ölçülmeli. Sıralı akıştaki çöküş bilinen bir zayıflık (catastrophic forgetting) ve bir sonraki geliştirme hattının ilk hedefi.
 
 ## Veri

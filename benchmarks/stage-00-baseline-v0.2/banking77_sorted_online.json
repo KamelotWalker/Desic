@@ -1,0 +1,97 @@
+{
+  "benchmark": "banking77",
+  "meta": {
+    "date": "2026-09-30 21:37:07 UTC",
+    "commit": "fd6c9c7",
+    "python": "3.11.15",
+    "machine": "x86_64",
+    "cpu_count": 4,
+    "torch": "2.14.1+cu130",
+    "gpu": false,
+    "args": {
+      "neural": false,
+      "epochs": 6,
+      "backbone": "scratch",
+      "sorted": true,
+      "out": "benchmarks/stage-00-baseline-v0.2/banking77_sorted_online.json"
+    }
+  },
+  "online": {
+    "10_per_intent": {
+      "accuracy": 0.5636,
+      "nll": 1.6701,
+      "brier": 0.5914,
+      "ece": 0.09,
+      "coverage@0.5": 0.4169,
+      "answered_acc@0.5": 0.8006,
+      "coverage@0.7": 0.2386,
+      "answered_acc@0.7": 0.898,
+      "coverage@0.9": 0.0938,
+      "answered_acc@0.9": 0.9412,
+      "train_seconds": 9.7,
+      "weights": {
+        "prior": 0.0095,
+        "linear": 0.7345,
+        "tree": 0.25,
+        "memory": 0.006
+      }
+    },
+    "25_per_intent": {
+      "accuracy": 0.7419,
+      "nll": 0.9323,
+      "brier": 0.361,
+      "ece": 0.0235,
+      "coverage@0.5": 0.762,
+      "answered_acc@0.5": 0.8547,
+      "coverage@0.7": 0.5968,
+      "answered_acc@0.7": 0.9102,
+      "coverage@0.9": 0.3844,
+      "answered_acc@0.9": 0.9713,
+      "train_seconds": 20.2,
+      "weights": {
+        "prior": 0.0058,
+        "linear": 0.7392,
+        "tree": 0.25,
+        "memory": 0.0051
+      }
+    },
+    "50_per_intent": {
+      "accuracy": 0.8149,
+      "nll": 0.6442,
+      "brier": 0.2586,
+      "ece": 0.015,
+      "coverage@0.5": 0.8734,
+      "answered_acc@0.5": 0.8792,
+      "coverage@0.7": 0.7516,
+      "answered_acc@0.7": 0.9305,
+      "coverage@0.9": 0.5857,
+      "answered_acc@0.9": 0.9706,
+      "train_seconds": 36.7,
+      "weights": {
+        "prior": 0.0052,
+        "linear": 0.7041,
+        "tree": 0.25,
+        "memory": 0.0408
+      }
+    },
+    "all": {
+      "accuracy": 0.1578,
+      "nll": 3.3688,
+      "brier": 1.1619,
+      "ece": 0.4743,
+      "coverage@0.5": 0.7321,
+      "answered_acc@0.5": 0.1663,
+      "coverage@0.7": 0.3666,
+      "answered_acc@0.7": 0.1931,
+      "coverage@0.9": 0.0834,
+      "answered_acc@0.9": 0.428,
+      "train_seconds": 94.5,
+      "weights": {
+        "prior": 0.0051,
+        "linear": 0.7101,
+        "tree": 0.25,
+        "memory": 0.0348
+      }
+    }
+  }
+}

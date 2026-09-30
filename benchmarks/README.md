@@ -5,6 +5,8 @@ Her geliştirme aşamasının ölçümleri burada **ayrı bir klasörde** ve de�
 | Aşama | Klasör | Ne ölçüldü | Özet |
 |---|---|---|---|
 | 00 | [`stage-00-baseline-v0.2`](stage-00-baseline-v0.2/) | v0.2 çevrimiçi öğrenci + yerleşik nöral öğrenci, Banking77 | %88,5 doğruluk, ECE 0,013; sıralı akışta %15,8'e çöküş |
+| 01a | [`stage-01a-adagrad-g0-rejected`](stage-01a-adagrad-g0-rejected/) | İlk kullanıcı denemesindeki aşırı güven hatası için AdaGrad `g0` denemesi | **Reddedildi:** az veride ECE 0,122 → 0,363, sıralı akış %15,8 → %1,5 |
+| 01b | [`stage-01b-evidence-scaled-updates`](stage-01b-evidence-scaled-updates/) | Adımın etiketin kanıt değeriyle ölçeklenmesi + 3 düzeltme | Hata giderildi (%55'lik etiket: 0,94 → 0,35), Banking77'de regresyon yok |
 
 ## Her aşama klasöründe
 

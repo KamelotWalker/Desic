@@ -160,6 +160,23 @@ Saf Python, ek ML bağımlılığı yok. Her soru için ayrı bir öğrenci:
 
 Desic, Laya'yı (Jev-uyumlu bir sunucu arkasında) **öğretmen** olarak kullanabilir: Laya'nın zero-shot bilgisi + Desic'in anlık öğrenmesi.
 
+## Benchmark: Banking77
+
+77 bankacılık niyeti, 10.003 eğitim / 3.080 test (`python examples/benchmark_banking77.py [--neural] [--sorted]`, CPU, GPU yok):
+
+| Kurulum | Doğruluk | Log loss | ECE |
+|---|---|---|---|
+| Çevrimiçi öğrenci, sınıf başına 10 örnek | %57,2 | 1,70 | 0,122 |
+| Çevrimiçi öğrenci, sınıf başına 50 örnek | %82,6 | 0,62 | 0,011 |
+| Çevrimiçi öğrenci, tüm veri (94 sn) | **%88,5** | 0,43 | **0,013** |
+| Yerleşik nöral öğrenci tek başına (6 epoch, 13,5 dk) | %68,4 | 1,15 | 0,015 |
+| Çevrimiçi + nöral karışım | %88,3 | 0,44 | 0,035 |
+| Çevrimiçi öğrenci, **sınıfa göre sıralı akış** (stres testi) | %15,8 | 3,37 | 0,474 |
+
+Seçici tahmin (çevrimiçi öğrenci, tüm veri): yalnızca ≥%70 eminken cevap verirse sorunun %85,7'sine %95,1, ≥%90 eminken %73,3'üne %97,8 doğrulukla cevap veriyor.
+
+Referans: yayınlanmış sonuçlarda (Casanueva ve ark., 2020) tam veriyle ince ayarlı BERT / ConveRT yaklaşık %93. Desic'in önceden eğitilmiş bir dil bilgisi yok; bu fark beklenen bir fark. Önceden eğitilmiş bir backbone (mmBERT / ModernBERT) ile nöral öğrenci GPU'da ayrıca ölçülmeli. Sıralı akıştaki çöküş bilinen bir zayıflık (catastrophic forgetting) ve bir sonraki geliştirme hattının ilk hedefi.
+
 ## Veri
 
 - **Kendi verin:** CSV/TSV/JSON/JSONL (≤ 50 MB). Cevap kolonunu ve state kolonlarını seç; state metin (kolonlar birleştirilir) ya da JSON nesnesi olur. Hold-out ile kalibrasyon dahil değerlendirme.

@@ -1,4 +1,4 @@
-"""Command line entry point: ``desic serve`` / ``desic demo``."""
+"""Command line entry point: ``desic serve`` / ``desic demo`` / ``desic eval``."""
 
 from __future__ import annotations
 
@@ -20,6 +20,11 @@ def main(argv: list[str] | None = None) -> None:
     demo.add_argument("--data", default=os.environ.get("DESIC_DATA", "data"))
     demo.add_argument("--rows", type=int, default=600, help="training tickets (loan applications: 3x)")
 
+    ev = sub.add_parser("eval", help="run the evaluation scenarios (Banking77: noise, drift, forgetting, teacher …)")
+    from .eval.run import add_arguments
+
+    add_arguments(ev)
+
     args = parser.parse_args(argv)
     if args.cmd == "serve":
         import uvicorn
@@ -31,6 +36,10 @@ def main(argv: list[str] | None = None) -> None:
         from .demo import build_demo
 
         print(build_demo(args.data, args.rows))
+    elif args.cmd == "eval":
+        from .eval.run import run
+
+        run(args)
 
 
 if __name__ == "__main__":

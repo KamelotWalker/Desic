@@ -35,4 +35,34 @@ Veri: [Banking77](https://github.com/PolyAI-LDN/task-specific-datasets) (PolyAI)
 | Kapsam @ eşik | Model yalnızca bu güvenin üstündeyken cevap verirse, soruların ne kadarını cevaplar | ↑ |
 | Cevaplanan doğruluk @ eşik | O cevapların doğruluğu (seçici risk = 1 − bu değer) | ↑ |
 
-Sonraki aşamalarda eklenecekler: kümülatif log loss, adaptation half-life (drift sonrası kaybedilen performansın yarısını kaç geri bildirimde geri kazandığı), forgetting index, hatalı etiket enjeksiyonu altında toparlanma, teacher dependency.
+### Akış metrikleri (aşama 02'den itibaren, `desic eval`)
+
+| Metrik | Anlamı | İyi yön |
+|---|---|---|
+| Kümülatif log loss | Akıştaki her etiket, öğrenilmeden *önce* kullanıcıya sunulan olasılıkla puanlanır (prequential); tüm akış boyunca ortalama. Hem ne kadar hızlı öğrendiğini hem ne kadar dürüst emin olduğunu ölçer | ↓ |
+| Risk@%80 | Model en emin olduğu %80'lik kısma cevap verirse hata oranı (seçici risk) | ↓ |
+| AURC | Risk–kapsam eğrisinin altındaki alan; eşikten bağımsız seçici risk | ↓ |
+| Kapsam / cevaplanan doğruluk | Varsayılan çekimserlik kuralıyla (güven < 0,6 veya tanımadığı girdi) cevap verdiği oran ve o cevapların doğruluğu | ↑ |
+| Forgetting index | Sıralı akışta her sınıfın gördüğü en iyi test doğruluğu ile final doğruluğu arasındaki fark, ortalama (Chaudhry ve ark., 2018) | ↓ |
+| Adaptation half-life | Bir şoktan (drift veya hatalı etiket patlaması) sonra kaybedilen başarımın yarısını geri kazanmak için gereken etiket sayısı | ↓ |
+| Teacher dependency | Öğretmene giden kararların oranı; zamanla düşmesi gerekir | ↓ |
+| Undo maliyeti | Hatalı etiketleri geri almak için yeniden oynatılması gereken olay sayısı ve süre | ↓ |
+
+### Senaryolar
+
+| Senaryo | Ne yapıyor |
+|---|---|
+| `shuffled` | Karışık akış; öğrenme eğrisi (500 / 1000 / 2500 / 5000 / tümü) |
+| `sorted` | Sınıflar sırayla gelir (11 grup); her gruptan sonra test, forgetting index |
+| `noise-1%`, `noise-5%` | Etiketlerin %1 / %5'i sessizce yanlış; model yalan söylendiği mesajlarda yalanı tekrarlıyor mu (`poison_repeated`) |
+| `burst` | Akışın ortasında A sınıfının 30 mesajı art arda B olarak etiketlenir; hasar, temiz etiketlerle toparlanma ve bugünkü geri alma maliyeti |
+| `drift` | Akışın ortasında 10 sınıfın anlamı döner (c₁→c₂→…→c₁₀→c₁); yeni anlamı öğrenme hızı ve diğer sınıfların kararlılığı |
+| `teacher` | Soğuk başlangıç, hiç etiket yok; çekimser kalınan mesajları simüle öğretmen (kalibre, ~%81 doğru, yumuşak etiket) etiketler, insan %5'ini kontrol eder |
+
+Her senaryo 3 tohumla koşulur (akış sırası, gürültü, saldırılan sınıf ve öğretmen hataları tohumdan türetilir) ve ortalama ± standart sapma raporlanır. Her öğrenci varyantı birebir aynı akışı görür.
+
+```bash
+desic eval --out sonuc.json                         # tüm senaryolar, 3 tohum (4 çekirdekte ~15 dk)
+desic eval --scenarios burst,drift --seeds 1        # bir kısmı
+desic eval --limit 2000 --seeds 1                   # hızlı deneme
+```

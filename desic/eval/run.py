@@ -102,6 +102,7 @@ def run(args: argparse.Namespace) -> dict:
     unknown = [s for s in names if s not in SCENARIOS]
     if unknown:
         raise SystemExit(f"unknown scenario(s): {', '.join(unknown)}")
+    info = meta(args)  # before running: the commit that produced the numbers
     _data(args.limit)  # download once before forking
     jobs = [(s, seed) for s in names for seed in range(args.seeds)]
     t0 = time.time()
@@ -111,7 +112,7 @@ def run(args: argparse.Namespace) -> dict:
         for job, fut in futures.items():
             done[job] = fut.result()
             print(f"  {job[0]} seed {job[1]}: {done[job]['seconds']}s", flush=True)
-    results = {"harness": "desic-eval/1", "data": "banking77", "learner": args.learner, "meta": meta(args),
+    results = {"harness": "desic-eval/1", "data": "banking77", "learner": args.learner, "meta": info,
                "wall_seconds": round(time.time() - t0, 1), "scenarios": {}}
     for s in names:
         runs = [done[(s, seed)] for seed in range(args.seeds)]

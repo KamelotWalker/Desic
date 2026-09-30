@@ -175,6 +175,17 @@ Desic, Laya'yı (Jev-uyumlu bir sunucu arkasında) **öğretmen** olarak kullana
 
 Seçici tahmin (çevrimiçi öğrenci, tüm veri): yalnızca ≥%70 eminken cevap verirse sorunun %85,7'sine %95,1, ≥%90 eminken %73,3'üne %97,8 doğrulukla cevap veriyor.
 
+### Akış senaryoları (`desic eval`)
+
+Doğruluk tek başına yetmiyor: model akış boyunca nasıl öğreniyor, hatalı etiketten ve drift'ten nasıl etkileniyor? Değerlendirme düzeneği bunu 7 senaryo × 3 tohumla ölçüyor ([aşama 02](benchmarks/stage-02-eval-harness/)):
+
+| Senaryo | Sonuç |
+|---|---|
+| %1 / %5 hatalı etiket | Doğruluk %88,5 / %87,9 (dayanıklı); %5'te ECE 0,085 |
+| 30 hatalı etiketlik patlama | Kurban sınıf %77 → %1, diğer sınıflarda da 3–5 puan hasar; geri alma = tüm kaydı (5.000 olay) yeniden oynatmak |
+| 10 sınıfın anlamı değişiyor (drift) | Yarı toparlanma 3.000 etiket; drift dedektörü tetiklenmiyor |
+| Öğretmenli soğuk başlangıç | Öğretmene bağımlılık %95 → %46 |
+
 Tüm aşamaların ölçümleri, ham loglar ve JSON sonuçları: [`benchmarks/`](benchmarks/).
 
 Referans: yayınlanmış sonuçlarda (Casanueva ve ark., 2020) tam veriyle ince ayarlı BERT / ConveRT yaklaşık %93. Desic'in önceden eğitilmiş bir dil bilgisi yok; bu fark beklenen bir fark. Önceden eğitilmiş bir backbone (mmBERT / ModernBERT) ile nöral öğrenci GPU'da ayrıca ölçülmeli. Sıralı akıştaki çöküş bilinen bir zayıflık (catastrophic forgetting) ve bir sonraki geliştirme hattının ilk hedefi.
@@ -190,13 +201,15 @@ Referans: yayınlanmış sonuçlarda (Casanueva ve ark., 2020) tam veriyle ince 
 
 ```bash
 pip install -e '.[dev]'
-pytest                      # 50 test: çekirdek, API, öğretmen/üretim, nöral öğrenci (torch yoksa atlanır)
+pytest                      # 62 test: çekirdek, API, öğretmen/üretim, nöral öğrenci (torch yoksa atlanır), değerlendirme
+desic eval --seeds 1        # akış senaryoları (Banking77)
 desic serve --reload
 ```
 
 ```
 desic/
   core/        features · experts · calibration · task · tree · model (adaptif ağaç) · drift · rules
+  eval/        data (Banking77) · metrics (prequential, seçici risk, forgetting, half-life) · scenarios · run
   neural/      text (girdi biçimi) · model (encoder + decision head) · train (kayıplar, RLCD, kalibrasyon) · runtime (kapılar)
   service.py   kararlar, feedback, öğretmen, işler, snapshot/rebuild
   llm.py       öğretmen sağlayıcıları (Anthropic SDK, OpenAI-uyumlu, Jev-uyumlu)

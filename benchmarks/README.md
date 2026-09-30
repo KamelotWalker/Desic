@@ -7,6 +7,7 @@ Her geliştirme aşamasının ölçümleri burada **ayrı bir klasörde** ve de�
 | 00 | [`stage-00-baseline-v0.2`](stage-00-baseline-v0.2/) | v0.2 çevrimiçi öğrenci + yerleşik nöral öğrenci, Banking77 | %88,5 doğruluk, ECE 0,013; sıralı akışta %15,8'e çöküş |
 | 01a | [`stage-01a-adagrad-g0-rejected`](stage-01a-adagrad-g0-rejected/) | İlk kullanıcı denemesindeki aşırı güven hatası için AdaGrad `g0` denemesi | **Reddedildi:** az veride ECE 0,122 → 0,363, sıralı akış %15,8 → %1,5 |
 | 01b | [`stage-01b-evidence-scaled-updates`](stage-01b-evidence-scaled-updates/) | Adımın etiketin kanıt değeriyle ölçeklenmesi + 3 düzeltme | Hata giderildi (%55'lik etiket: 0,94 → 0,35), Banking77'de regresyon yok |
+| 02 | [`stage-02-eval-harness`](stage-02-eval-harness/) | Faz 0: değerlendirme düzeneği, 7 akış senaryosu × 3 tohum | Karışık %88,8 · ECE 0,015; 30 hatalı etiket bir sınıfı ele geçiriyor (%77 → %1), geri alma = 5.000 olay; drift yarı ömrü 3.000 etiket; forgetting index 0,63 |
 
 ## Her aşama klasöründe
 
@@ -57,12 +58,12 @@ Veri: [Banking77](https://github.com/PolyAI-LDN/task-specific-datasets) (PolyAI)
 | `noise-1%`, `noise-5%` | Etiketlerin %1 / %5'i sessizce yanlış; model yalan söylendiği mesajlarda yalanı tekrarlıyor mu (`poison_repeated`) |
 | `burst` | Akışın ortasında A sınıfının 30 mesajı art arda B olarak etiketlenir; hasar, temiz etiketlerle toparlanma ve bugünkü geri alma maliyeti |
 | `drift` | Akışın ortasında 10 sınıfın anlamı döner (c₁→c₂→…→c₁₀→c₁); yeni anlamı öğrenme hızı ve diğer sınıfların kararlılığı |
-| `teacher` | Soğuk başlangıç, hiç etiket yok; çekimser kalınan mesajları simüle öğretmen (kalibre, ~%81 doğru, yumuşak etiket) etiketler, insan %5'ini kontrol eder |
+| `teacher` | Soğuk başlangıç, hiç etiket yok; çekimser kalınan mesajları simüle öğretmen (kalibre, ~%80 doğru, yumuşak etiket) etiketler, insan %5'ini kontrol eder |
 
 Her senaryo 3 tohumla koşulur (akış sırası, gürültü, saldırılan sınıf ve öğretmen hataları tohumdan türetilir) ve ortalama ± standart sapma raporlanır. Her öğrenci varyantı birebir aynı akışı görür.
 
 ```bash
-desic eval --out sonuc.json                         # tüm senaryolar, 3 tohum (4 çekirdekte ~15 dk)
+desic eval --out sonuc.json                         # tüm senaryolar, 3 tohum (4 çekirdekte ~10 dk)
 desic eval --scenarios burst,drift --seeds 1        # bir kısmı
 desic eval --limit 2000 --seeds 1                   # hızlı deneme
 ```

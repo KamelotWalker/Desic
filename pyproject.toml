@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "desic"
-version = "0.1.0"
-description = "Self-learning, explainable decision engine with a realtime feedback dashboard"
+version = "0.2.0"
+description = "Self-learning typed-decision engine (System One): calibrated choice / score / noul answers that improve from every piece of feedback"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }

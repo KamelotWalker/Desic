@@ -1,302 +1,153 @@
-"""Synthetic dataset generation with the user's own LLM API key.
+"""Synthetic training data for a typed question, written by the user's own LLM.
 
-Two steps:
-1. ``design_schema`` – turn a plain-language description of a decision
-   ("approve a small-business loan") into features, classes and the hidden
-   decision logic.
-2. ``generate_rows`` – ask the LLM for labelled rows in batches, validated
-   against that schema.
+1. ``design_task`` – a plain-language description ("route support tickets to
+   billing / technical / sales") becomes a typed question: type, instructions,
+   answers with descriptions, and the shape of a realistic state.
+2. ``generate_examples`` – the LLM writes realistic, diverse states with the
+   correct answer, in batches, validated against the question.
 
-API keys are passed per request and are never stored or logged by Desic.
-Providers: Anthropic (Claude) through the official SDK, and any
-OpenAI-compatible Chat Completions endpoint (OpenAI, Gemini, Groq,
-OpenRouter, Ollama, LM Studio, ...).
+The result is an ordinary dataset: review it, then train the student on it.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Protocol
+from typing import Any, Awaitable, Callable
 
-import anthropic
-import httpx
+from .core.task import CHOICE, NOUL, TYPES, QuestionSpec
+from .llm import JevCompatibleProvider, LLMError
 
-from .core.schema import CATEGORICAL, NUMERIC, to_label, to_number
+BATCH_SIZE = 20
+MAX_EXAMPLES = 5000
 
-DEFAULT_ANTHROPIC_MODEL = "claude-opus-5-5"
-# Models that accept output_config.effort and server-side refusal fallbacks.
-_FALLBACK_MODELS = {"claude-opus-5-5", "claude-opus-5", "claude-fable-5-1", "claude-sonnet-5-5"}
-BATCH_SIZE = 40
-MAX_ROWS = 5000
-
-
-class GenerationError(RuntimeError):
-    pass
-
-
-class JSONProvider(Protocol):
-    async def complete_json(self, system: str, prompt: str, schema: dict) -> Any: ...
-
-
-@dataclass
-class ProviderConfig:
-    provider: str = "anthropic"  # "anthropic" | "openai"
-    api_key: str = ""
-    model: str = ""
-    base_url: str = ""
-
-    def __repr__(self) -> str:  # never leak the key into logs / tracebacks
-        return f"ProviderConfig(provider={self.provider!r}, model={self.model!r}, base_url={self.base_url!r})"
-
-
-class AnthropicProvider:
-    def __init__(self, api_key: str, model: str = "") -> None:
-        # An empty key falls back to the server's own credentials (ANTHROPIC_API_KEY etc.).
-        self.client = anthropic.AsyncAnthropic(api_key=api_key or None, max_retries=3)
-        self.model = model or DEFAULT_ANTHROPIC_MODEL
-
-    async def complete_json(self, system: str, prompt: str, schema: dict) -> Any:
-        kwargs: dict[str, Any] = {
-            "model": self.model,
-            "max_tokens": 16000,
-            "system": system,
-            "messages": [{"role": "user", "content": prompt}],
-        }
-        output_config: dict[str, Any] = {"format": {"type": "json_schema", "schema": schema}}
-        try:
-            if self.model in _FALLBACK_MODELS:
-                output_config["effort"] = "medium"
-                resp = await self.client.beta.messages.create(
-                    **kwargs,
-                    output_config=output_config,
-                    betas=["server-side-fallback-2026-07-01"],
-                    fallbacks="default",
-                )
-            else:
-                resp = await self.client.messages.create(**kwargs, output_config=output_config)
-        except anthropic.AuthenticationError:
-            raise GenerationError("Anthropic rejected the API key") from None
-        except anthropic.PermissionDeniedError:
-            raise GenerationError("this API key is not allowed to use that model") from None
-        except anthropic.NotFoundError:
-            raise GenerationError(f"unknown Anthropic model {self.model!r}") from None
-        except anthropic.RateLimitError:
-            raise GenerationError("rate limited by Anthropic, try again shortly or request fewer rows") from None
-        except anthropic.BadRequestError as e:
-            raise GenerationError(f"Anthropic rejected the request: {e.message}") from None
-        except anthropic.APIStatusError as e:
-            raise GenerationError(f"Anthropic API error ({e.status_code}): {e.message}") from None
-        except anthropic.APIConnectionError:
-            raise GenerationError("could not reach the Anthropic API") from None
-
-        if resp.stop_reason == "refusal":
-            raise GenerationError("the model declined to generate this data; try rephrasing the description")
-        if resp.stop_reason == "max_tokens":
-            raise GenerationError("the response was cut off; request fewer rows per batch")
-        text = next((b.text for b in resp.content if b.type == "text"), "")
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            raise GenerationError("the model returned invalid JSON") from None
-
-
-class OpenAICompatibleProvider:
-    def __init__(self, api_key: str, model: str, base_url: str = "") -> None:
-        if not model:
-            raise GenerationError("model name is required for OpenAI-compatible providers")
-        self.api_key = api_key
-        self.model = model
-        self.base_url = (base_url or "https://api.openai.com/v1").rstrip("/")
-
-    async def complete_json(self, system: str, prompt: str, schema: dict) -> Any:
-        body = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": prompt + "\n\nRespond with a single JSON object that matches this JSON Schema:\n"
-                 + json.dumps(schema)},
-            ],
-            "response_format": {"type": "json_object"},
-        }
-        headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
-        try:
-            async with httpx.AsyncClient(timeout=180) as client:
-                r = await client.post(f"{self.base_url}/chat/completions", json=body, headers=headers)
-        except httpx.HTTPError as e:
-            raise GenerationError(f"could not reach {self.base_url}: {type(e).__name__}") from None
-        if r.status_code in (401, 403):
-            raise GenerationError("the provider rejected the API key")
-        if r.status_code >= 400:
-            raise GenerationError(f"provider error {r.status_code}: {r.text[:300]}")
-        try:
-            content = r.json()["choices"][0]["message"]["content"]
-            return json.loads(content)
-        except (KeyError, IndexError, TypeError, json.JSONDecodeError):
-            raise GenerationError("the provider returned an unexpected or non-JSON response") from None
-
-
-def make_provider(cfg: ProviderConfig) -> JSONProvider:
-    if cfg.provider == "anthropic":
-        return AnthropicProvider(cfg.api_key, cfg.model)
-    if cfg.provider in ("openai", "openai_compatible"):
-        return OpenAICompatibleProvider(cfg.api_key, cfg.model, cfg.base_url)
-    raise GenerationError(f"unknown provider {cfg.provider!r}")
-
-
-# ---------------------------------------------------------------- schema design
 SYSTEM = (
-    "You design and generate realistic tabular training data for Desic, a self-learning decision engine. "
-    "Data must be plausible for the domain, internally consistent, and useful for learning a decision."
+    "You design and write realistic training data for Desic, a fast typed-decision model. States must look like "
+    "real application data (messages, tickets, records), be diverse in wording, length, tone and language mix, and "
+    "the labelled answer must be what a careful domain expert would choose."
 )
 
 DESIGN_SCHEMA = {
     "type": "object",
     "properties": {
-        "name": {"type": "string", "description": "short snake_case name for the decision model"},
-        "target": {"type": "string", "description": "snake_case name of the decision column"},
-        "classes": {"type": "array", "items": {"type": "string"}, "description": "possible decisions"},
-        "decision_logic": {"type": "string", "description": "the rules a domain expert would use"},
-        "features": {
+        "name": {"type": "string", "description": "short snake_case question name"},
+        "type": {"type": "string", "enum": list(TYPES)},
+        "instructions": {"type": "string", "description": "the question, as asked at decision time"},
+        "answers": {
             "type": "array",
             "items": {
                 "type": "object",
-                "properties": {
-                    "name": {"type": "string"},
-                    "type": {"type": "string", "enum": [NUMERIC, CATEGORICAL]},
-                    "description": {"type": "string"},
-                    "values": {"type": "array", "items": {"type": "string"}},
-                    "min": {"type": "number"},
-                    "max": {"type": "number"},
-                },
-                "required": ["name", "type", "description", "values", "min", "max"],
+                "properties": {"name": {"type": "string"}, "description": {"type": "string"}},
+                "required": ["name", "description"],
                 "additionalProperties": False,
             },
         },
+        "state_format": {"type": "string", "enum": ["text", "json"]},
+        "state_description": {"type": "string", "description": "what a state contains"},
+        "decision_guidelines": {"type": "string", "description": "how an expert decides, incl. edge cases"},
     },
-    "required": ["name", "target", "classes", "decision_logic", "features"],
+    "required": ["name", "type", "instructions", "answers", "state_format", "state_description", "decision_guidelines"],
     "additionalProperties": False,
 }
 
 
-async def design_schema(provider: JSONProvider, description: str, n_features: int = 6) -> dict:
+def _require_json_provider(provider: Any) -> None:
+    if isinstance(provider, JevCompatibleProvider):
+        raise LLMError("data generation needs a generative LLM (Anthropic or OpenAI-compatible), not a decision API")
+
+
+async def design_task(provider: Any, description: str) -> dict:
+    _require_json_provider(provider)
     prompt = (
-        f"Design a dataset for this decision problem:\n\n{description}\n\n"
-        f"Use about {n_features} input features that a real system would have at decision time "
-        "(no identifiers, no leakage of the answer). For categorical features list every allowed value in "
-        "`values` and set min/max to 0. For numeric features leave `values` empty and give a realistic min/max. "
-        "`classes` are the possible decisions (2-6). `decision_logic` explains, in a few sentences, how an "
-        "expert maps features to the decision, including trade-offs and exceptions."
+        f"Design a typed decision question for this need:\n\n{description}\n\n"
+        "Pick the type: 'choice' (one of several answers), 'score' (ordered levels, list them lowest first) or "
+        "'noul' (a yes/no proposition; answers must be exactly 'true' and 'false'). Use 2-12 answers with short "
+        "snake_case names and a one-line description each. Choose 'text' states for messages/documents and 'json' "
+        "for structured records."
     )
     return normalize_design(await provider.complete_json(SYSTEM, prompt, DESIGN_SCHEMA))
 
 
 def normalize_design(d: dict) -> dict:
-    feats = []
-    seen = set()
-    for f in d.get("features", []):
-        name = str(f.get("name", "")).strip()
-        if not name or name in seen or name == d.get("target"):
-            continue
-        seen.add(name)
-        ftype = CATEGORICAL if f.get("type") == CATEGORICAL else NUMERIC
-        feat = {"name": name, "type": ftype, "description": str(f.get("description", ""))}
-        if ftype == CATEGORICAL:
-            feat["values"] = [str(v) for v in f.get("values", []) if str(v).strip()]
-            if not feat["values"]:
-                raise GenerationError(f"categorical feature {name!r} needs at least one value")
-        else:
-            feat["min"] = float(f.get("min", 0) or 0)
-            feat["max"] = float(f.get("max", 0) or 0)
-        feats.append(feat)
-    classes = [str(c) for c in d.get("classes", []) if str(c).strip()]
-    if not feats:
-        raise GenerationError("the design has no features")
-    if len(classes) < 2:
-        raise GenerationError("the design needs at least two classes")
+    qtype = d.get("type") if d.get("type") in TYPES else CHOICE
+    answers = {}
+    for a in d.get("answers", []):
+        name = str(a.get("name", "")).strip() if isinstance(a, dict) else str(a).strip()
+        if name:
+            answers[name] = str(a.get("description", "")) if isinstance(a, dict) else ""
+    if qtype == NOUL:
+        answers = {"true": answers.get("true", ""), "false": answers.get("false", "")}
+    name = "".join(c if c.isalnum() or c in "_-." else "_" for c in str(d.get("name") or "decision"))[:64] or "decision"
+    spec = QuestionSpec.parse(name, {"type": qtype, "instructions": d.get("instructions", ""), "criteria": answers})
     return {
-        "name": str(d.get("name") or "generated_model"),
-        "target": str(d.get("target") or "decision"),
-        "classes": classes,
-        "decision_logic": str(d.get("decision_logic", "")),
-        "features": feats,
+        **spec.to_dict(),
+        "state_format": "json" if d.get("state_format") == "json" else "text",
+        "state_description": str(d.get("state_description", "")),
+        "decision_guidelines": str(d.get("decision_guidelines", "")),
     }
 
 
-# ------------------------------------------------------------------ generation
-def rows_schema(design: dict) -> dict:
-    props: dict[str, Any] = {}
-    for f in design["features"]:
-        if f["type"] == CATEGORICAL:
-            props[f["name"]] = {"type": "string", "enum": f["values"]}
-        else:
-            props[f["name"]] = {"type": "number"}
-    props[design["target"]] = {"type": "string", "enum": design["classes"]}
-    row = {"type": "object", "properties": props, "required": list(props), "additionalProperties": False}
+def examples_schema(spec: QuestionSpec) -> dict:
     return {
         "type": "object",
-        "properties": {"rows": {"type": "array", "items": row}},
-        "required": ["rows"],
+        "properties": {
+            "examples": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "state": {"type": "string"},
+                        "answer": {"type": "string", "enum": spec.option_names},
+                    },
+                    "required": ["state", "answer"],
+                    "additionalProperties": False,
+                },
+            }
+        },
+        "required": ["examples"],
         "additionalProperties": False,
     }
 
 
-def _describe_columns(design: dict) -> str:
-    lines = []
-    for f in design["features"]:
-        if f["type"] == CATEGORICAL:
-            lines.append(f"- {f['name']} (one of: {', '.join(f['values'])}): {f.get('description', '')}")
-        else:
-            rng = f" range ~{f.get('min')}..{f.get('max')}" if f.get("max", 0) > f.get("min", 0) else ""
-            lines.append(f"- {f['name']} (number{rng}): {f.get('description', '')}")
-    lines.append(f"- {design['target']} (the decision, one of: {', '.join(design['classes'])})")
-    return "\n".join(lines)
-
-
-def validate_rows(design: dict, rows: list) -> list[dict]:
+def validate_examples(spec: QuestionSpec, items: Any, state_format: str) -> list[dict]:
     out = []
-    target = design["target"]
-    classes = set(design["classes"])
-    for r in rows if isinstance(rows, list) else []:
-        if not isinstance(r, dict):
+    for it in items if isinstance(items, list) else []:
+        if not isinstance(it, dict) or it.get("answer") not in spec.options:
             continue
-        label = to_label(r.get(target))
-        if label not in classes:
+        state: Any = str(it.get("state", "")).strip()
+        if not state:
             continue
-        row: dict[str, Any] = {}
-        ok = True
-        for f in design["features"]:
-            v = r.get(f["name"])
-            if f["type"] == CATEGORICAL:
-                v = to_label(v)
-                if v not in f["values"]:
-                    ok = False
-                    break
-            else:
-                v = to_number(v)
-                if v is None:
-                    ok = False
-                    break
-            row[f["name"]] = v
-        if ok:
-            row[target] = label
-            out.append(row)
+        if state_format == "json":
+            try:
+                parsed = json.loads(state)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(parsed, dict):
+                continue
+            state = parsed
+        out.append({"state": state, "answer": it["answer"]})
     return out
 
 
-async def generate_rows(
-    provider: JSONProvider,
+async def generate_examples(
+    provider: Any,
     design: dict,
     description: str,
-    n_rows: int,
+    n: int,
     on_progress: Callable[[int, int], Awaitable[None]] | None = None,
     concurrency: int = 3,
 ) -> list[dict]:
-    n_rows = max(1, min(int(n_rows), MAX_ROWS))
-    n_batches = (n_rows + BATCH_SIZE - 1) // BATCH_SIZE
-    schema = rows_schema(design)
-    columns = _describe_columns(design)
+    _require_json_provider(provider)
+    spec = QuestionSpec.parse(design["name"], {"type": design["type"], "instructions": design.get("instructions", ""),
+                                               "criteria": design["options"]})
+    fmt = "json" if design.get("state_format") == "json" else "text"
+    n = max(1, min(int(n), MAX_EXAMPLES))
+    n_batches = (n + BATCH_SIZE - 1) // BATCH_SIZE
+    answers = "\n".join(f"- {k}" + (f": {v}" if v else "") for k, v in spec.options.items())
+    kind = {"choice": "one answer", "score": "one level (listed lowest first)", "noul": "true or false"}[spec.type]
+    fmt_note = ("Each state is plain text (a message, ticket, note …)." if fmt == "text" else
+                "Each state is a JSON object serialised as a string (realistic field names and values).")
+    schema = examples_schema(spec)
     sem = asyncio.Semaphore(concurrency)
     results: list[list[dict]] = [[] for _ in range(n_batches)]
     done = 0
@@ -304,24 +155,25 @@ async def generate_rows(
 
     async def run(i: int) -> None:
         nonlocal done
-        size = min(BATCH_SIZE, n_rows - i * BATCH_SIZE)
-        focus = design["classes"][i % len(design["classes"])]
+        size = min(BATCH_SIZE, n - i * BATCH_SIZE)
+        focus = spec.option_names[i % len(spec.option_names)]
         prompt = (
-            f"Decision problem: {description}\n\n"
-            f"Expert decision logic (follow it, with ~5% realistic exceptions/noise):\n{design['decision_logic']}\n\n"
-            f"Columns:\n{columns}\n\n"
-            f"Generate exactly {size} rows in `rows`. This is batch {i + 1} of {n_batches}: make these rows different "
-            f"from typical examples, spread values across their full ranges, include cases close to the decision "
-            f"boundaries, and include slightly more '{focus}' examples than usual while still covering every class."
+            f"Need: {description}\n\nQuestion ({spec.type}): {spec.instructions or spec.name}\n"
+            f"Answers ({kind}):\n{answers}\n\n"
+            f"State: {design.get('state_description', '')}\n{fmt_note}\n"
+            f"Expert guidelines: {design.get('decision_guidelines', '')}\n\n"
+            f"Write exactly {size} examples. Batch {i + 1} of {n_batches}: vary wording, length and tone, include "
+            f"hard and borderline cases, some noise (typos, mixed Turkish/English where natural), and slightly more "
+            f"'{focus}' cases than usual while still covering every answer."
         )
         async with sem:
             data = await provider.complete_json(SYSTEM, prompt, schema)
-        rows = validate_rows(design, data.get("rows", []) if isinstance(data, dict) else [])
+        rows = validate_examples(spec, data.get("examples", []) if isinstance(data, dict) else [], fmt)
         results[i] = rows
         async with lock:
             done += len(rows)
             if on_progress:
-                await on_progress(done, n_rows)
+                await on_progress(done, n)
 
     outcomes = await asyncio.gather(*(run(i) for i in range(n_batches)), return_exceptions=True)
     errors = [e for e in outcomes if isinstance(e, BaseException)]
@@ -329,5 +181,6 @@ async def generate_rows(
     if not rows:
         if errors:
             raise errors[0]
-        raise GenerationError("the model did not return any valid rows")
-    return rows[:n_rows]
+        raise LLMError("the model did not return any valid examples")
+    return rows[:n]
+

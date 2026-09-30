@@ -235,3 +235,12 @@ tr.clickable:hover td { background: var(--surface-2); }
 .toast.error { border-left-color: var(--critical); }
 .toast.good { border-left-color: var(--good); }
 .toast.warn { border-left-color: var(--warning); }
+
+/* ------------------------------------------------------------------ v0.2 additions */
+.grid-2.even { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+@media (max-width: 900px) { .grid-2.even { grid-template-columns: 1fr; } }
+textarea.mono { font-family: var(--mono); font-size: 12.5px; }
+.panel h2 + .result { margin-top: 0; }
+.bar-row .val { white-space: nowrap; }
+.kpis { grid-template-columns: repeat(auto-fill, minmax(165px, 1fr)); }
+input[type=range] { padding: 0; }

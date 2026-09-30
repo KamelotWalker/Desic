@@ -1,137 +1,175 @@
 # Desic
 
-**Kendi kendine öğrenen, açıklanabilir karar motoru** — gerçek zamanlı geri bildirim dashboard'u, kendi veri setinizle eğitim ve kendi AI API anahtarınızla veri üretimi.
-
-Desic klasik kural motorlarının (Drools/JESS tarzı "EĞER … İSE …" kuralları) şeffaflığını, sürekli öğrenen bir karar ağacıyla birleştirir:
-
-- Her karar **neden** verildiğini gösterir (ağaçtaki yol: `credit_score > 1423 → employment ≠ unemployed → approve`).
-- Kullanıcı "bu doğru / yanlış, doğrusu X" dediği anda model **tek örnekten** öğrenir. Yeniden eğitim yok, batch yok.
-- Doğru cevap zamanla değişirse (**concept drift**) Desic bunu fark eder ve kendini günceller.
-- Öğrenilen yollar okunabilir kurallara dönüşür; istediğinizi tek tıkla **sabit kurala** çevirip modeli ezebilirsiniz.
+**Kendi kendine öğrenen, kalibre typed-decision motoru (System One).**
+Jev ve Laya gibi Desic de serbest metin üretmez: bir `state` (metin veya JSON) ve tipli sorular alır, izin verilen cevaplar üzerinde **olasılık dağılımı** döndürür. Farkı: her kullanıcı geri bildiriminden **anında öğrenir**, emin olmadığında **çekimser kalır** ve gerekirse kendi LLM anahtarınızla çalışan bir "öğretmene" (System 2) danışıp ondan da öğrenir.
 
 ```
-            ┌────────────── Dashboard (gerçek zamanlı, WebSocket) ──────────────┐
-            │ karar ver · geri bildirim · doğruluk grafiği · ağaç · kurallar     │
-            └──────────────┬─────────────────────────────────────▲─────────────┘
- senin servisin ──HTTP──►  │  /decide  →  sabit kurallar ──eşleşme yok──► öğrenen model
-                           │  /feedback →  prequential ölçüm → model.learn_one() │
-                           │  /datasets →  CSV/JSON yükle → akış halinde eğit    │
-                           │  /generate →  LLM (senin anahtarın) → sentetik veri │
-                           └──────────────── SQLite (modeller, karar günlüğü) ───┘
+                     ┌────────────── Dashboard (gerçek zamanlı, WebSocket) ───────────────┐
+                     │ playground · kalibrasyon · review queue · feedback log · sürümler   │
+                     └───────────────┬─────────────────────────────────────▲──────────────┘
+ servisin ─ POST /v1/decide ────────►│ state + { soru: choice | score | noul }            │
+                                     ▼                                                    │
+                        sabit kurallar ──eşleşme yok──► ÖĞRENCİ (System 1)                │
+                                                        prior · linear · tree · memory   │
+                                                        → Hedge karışımı → sıcaklık kalib.│
+                                                        → tanıdıklık → güven / abstain    │
+                                        abstain ise ──► ÖĞRETMEN (System 2): Claude,      │
+                                                        OpenAI-uyumlu LLM ya da           │
+                                                        Jev-uyumlu API (ör. Laya)         │
+                                                        cevabı sunulur + öğrenciye öğretilir
+ servisin ─ POST /v1/feedback ──────► değiştirilemez feedback log ─► öğrenci anında günceller
+                                      (retract · rebuild · snapshot · rollback)
 ```
 
 ## Hızlı başlangıç
 
 ```bash
 pip install -e .            # Python 3.10+
-desic demo                  # örnek kredi-onay modeli + veri seti oluşturur
+desic demo                  # destek talepleri (metin) + kredi başvuruları (JSON) için 3 soru
 desic serve                 # http://127.0.0.1:8000
 ```
 
-Dashboard'da **Models → loan_demo** açın. Başka bir terminalde gerçek kullanıcıları simüle edin ve grafiğin canlı değişmesini izleyin:
+**Playground**'da "Support ticket" örneğiyle **Decide**'a bas. Sonra başka bir terminalde gerçek kullanıcıları simüle et; soru sayfasındaki öğrenme eğrisi ve güvenilirlik diyagramı canlı değişir:
 
 ```bash
-python examples/feedback_simulator.py --n 1000 --drift 500   # 500. karardan sonra "banka politikası" değişir
+python examples/feedback_simulator.py --n 1000 --drift 500   # 500. karardan sonra kredi politikası değişir
 ```
 
-Docker ile:
+Öğretmen (isteğe bağlı): dashboard'da **Teacher** sayfasından sağlayıcı ve anahtar gir, ya da:
 
 ```bash
-docker build -t desic . && docker run -p 8000:8000 -v desic-data:/data desic
+ANTHROPIC_API_KEY=sk-ant-... desic serve                       # Claude (varsayılan: claude-opus-5-5)
+DESIC_TEACHER_PROVIDER=openai DESIC_TEACHER_BASE_URL=https://api.openai.com/v1 \
+DESIC_TEACHER_MODEL=<model> DESIC_TEACHER_API_KEY=... desic serve
+DESIC_TEACHER_PROVIDER=jev_compatible DESIC_TEACHER_BASE_URL=http://localhost:9000/v1/decide desic serve  # ör. self-host Laya
 ```
 
-## Öğrenme motoru nasıl çalışıyor?
+Docker: `docker build -t desic . && docker run -p 8000:8000 -v desic-data:/data desic`
 
-Tamamı saf Python, ek ML kütüphanesi yok (`desic/core`).
-
-| Parça | Ne yapar |
-|---|---|
-| **Hoeffding ağacı** (`tree.py`) | VFDT (Domingos & Hulten, 2000). Her örnek bir kez görülür ve atılır; bir yaprak ancak Hoeffding sınırı "en iyi bölme gerçekten en iyisi" dediğinde bölünür. Sayısal özellikler için sınıf başına Gauss tahmincisi, kategorikler için sayaçlar. Yapraklarda *Naive Bayes Adaptive* tahmin. Eksik değerler desteklenir. |
-| **Drift algılama** (`drift.py`) | DDM (Gama, 2004). Hata oranı yükselince önce *uyarı* verip arka planda yeni bir ağaç eğitmeye başlar, *drift* kesinleşince onu devreye alır. |
-| **Adaptive Random Forest** (`model.py`) | İsteğe bağlı: Poisson(6) yeniden örnekleme + rastgele alt özellik kümeleri ile N ağaç, her birinin kendi drift dedektörü; oylar son doğruluğa göre ağırlıklı. Daha isabetli, açıklama en isabetli ağaçtan gelir. |
-| **Prequential ölçüm** | Her etiket öğrenilmeden *önce* puanlanır, yani dashboard'daki doğruluk hep "görülmemiş veri" doğruluğudur. Geri bildirimde, kullanıcıya gösterilmiş olan tahmin puanlanır. |
-| **Sabit kurallar** (`rules.py`) | Öncelik sıralı, `==, !=, >, >=, <, <=, in, not_in, contains, is_missing` operatörleri. Kurala uyan kararlarda da model arka planda öğrenmeye devam eder; dashboard her kuralın kaç kez insan tarafından **ezildiğini** gösterir. |
-| **Aktif öğrenme** | "Review queue" etiketsiz kararları modelin en emin olmadığı sırayla listeler; en çok bilgi kazandıran geri bildirimler önce. |
-
-## Veri setleri
-
-- **Kendi verin:** CSV, TSV, `;` ayraçlı CSV, JSON dizisi veya JSON Lines (≤ 50 MB). Kolon tipleri otomatik çıkarılır; hedef (karar) kolonunu seçip tek tıkla eğitirsin. Hold-out oranı ve kaç tur geçileceği ayarlanabilir; mevcut bir modeli yeni veriyle eğitmeye devam etmek de mümkün.
-- **AI ile üret (kendi API anahtarınla):** Kararı düz metinle anlat ("KOBİ kredisi onayla/incele/reddet") → LLM özellikleri, sınıfları ve karar mantığını tasarlar → tasarımı düzenle → satırlar 40'lık gruplar halinde, şemaya göre doğrulanarak üretilir → istersen hemen model eğitilir.
-  - **Anthropic (Claude)** resmi SDK ile, yapılandırılmış çıktı (JSON schema) kullanılarak. Varsayılan model `claude-opus-5-5`.
-  - **OpenAI-uyumlu her uç nokta**: OpenAI, Google Gemini, Groq, OpenRouter, yerel Ollama / LM Studio …
-  - Anahtar yalnızca o istek için sağlayıcıya iletilir; Desic **saklamaz, loglamaz**. Boş bırakılırsa sunucunun `ANTHROPIC_API_KEY` ortam değişkeni kullanılır. "Bu tarayıcıda hatırla" işaretlenirse yalnızca tarayıcının `localStorage`'ında durur.
-
-## API
-
-Etkileşimli referans: `http://127.0.0.1:8000/docs`. Dashboard'daki **Integrate** sekmesi seçili model için hazır `curl`/Python örnekleri üretir.
+## API (Jev istek biçimi)
 
 ```bash
-# 1) karar iste
-curl -X POST localhost:8000/api/models/loan_demo/decide -H 'Content-Type: application/json' \
-  -d '{"features": {"monthly_income": 45000, "loan_amount": 100000, "credit_score": 1700,
-                    "employment": "salaried", "debt_ratio": 0.2, "city": "izmir"}}'
-# → {"id": "…", "prediction": "approve", "confidence": 0.92, "explanation": {"path": [...]}, ...}
+curl -s -X POST localhost:8000/v1/decide -H 'Content-Type: application/json' -d '{
+  "state": "Kartımdan iki kez ödeme çekildi, acil iade istiyorum",
+  "questions": {
+    "department": {"type": "choice", "instructions": "Which team should handle this?",
+                   "criteria": {"billing": "payments, refunds", "technical": "bugs", "sales": "pricing"}},
+    "severity":   {"type": "score",  "criteria": {"low": "cosmetic", "medium": "workaround exists", "high": "blocking"}},
+    "urgent":     {"type": "noul",   "instructions": "The customer needs a response today."}
+  },
+  "explain": true
+}'
+```
 
-# 2) gerçek sonucu bildir → model anında öğrenir, dashboard anında güncellenir
-curl -X POST localhost:8000/api/models/loan_demo/feedback -H 'Content-Type: application/json' \
-  -d '{"decision_id": "…", "label": "approve"}'
+```jsonc
+{
+  "id": "dec_…",
+  "answers": {
+    "department": {"type": "choice", "choice": "billing", "probabilities": {"billing": 0.97, "sales": 0.02, "technical": 0.01},
+                   "confidence": 0.97, "abstain": false, "source": "student", "explanation": {…}},
+    "severity":   {"type": "score", "score": 0.4, "level": "low", "probabilities": {…}, …},
+    "urgent":     {"type": "noul", "probability": 0.95, "answer": true, …}
+  }
+}
+```
+
+- Yeni bir soru adı ilk kullanımda otomatik kaydedilir; bilinen soru için `{}` göndermek yeterli.
+- `choice` sorusuna feedback ile **yeni bir cevap** öğretilebilir (open world); `score` seviyeleri sabittir.
+- `escalate`: `auto` (sorunun öğretmen ayarı) · `never` · `always`. `abstain_threshold` istek bazında değiştirilebilir.
+
+Gerçek sonuç belli olunca:
+
+```bash
+curl -s -X POST localhost:8000/v1/feedback -H 'Content-Type: application/json' \
+  -d '{"decision_id": "dec_…", "answers": {"department": "billing", "urgent": true, "severity": 2}}'
 ```
 
 | Uç nokta | Açıklama |
 |---|---|
-| `GET/POST /api/models` | modelleri listele / şemayla yeni model oluştur (`kind`: `tree` \| `forest`) |
-| `GET/DELETE /api/models/{name}` · `POST …/reset` | detay (metrikler, geçmiş, önem, olaylar) / sil / öğrendiklerini sıfırla |
-| `POST …/decide` · `POST …/feedback` · `POST …/learn` | karar · geri bildirim · etiketli satırlarla toplu öğrenme |
-| `GET …/decisions?pending=true&uncertain_first=true` | karar günlüğü / aktif öğrenme kuyruğu |
-| `GET …/tree` · `GET …/learned-rules` · `PUT …/rules` | ağaç · çıkarılmış kurallar · sabit kurallar |
-| `POST /api/datasets` · `GET /api/datasets/{id}` · `POST …/{id}/train` | yükle · profil+önizleme · eğitim işi başlat |
-| `POST /api/generate/design` · `POST /api/generate/dataset` | LLM ile şema tasarla · veri üret (+ opsiyonel eğitim) |
-| `GET /api/jobs/{id}` · `WS /ws` | arka plan işleri · gerçek zamanlı olay akışı |
+| `POST /v1/decide` · `POST /v1/feedback` · `GET /v1/decisions/{id}` | karar · geri bildirim · karar kaydı |
+| `GET/POST /v1/questions` · `GET/PATCH/DELETE /v1/questions/{name}` | sorular; ayarlar: `abstain_threshold`, `teacher_mode` (`off`/`on_abstain`/`always`), `teacher_weight` |
+| `POST …/{name}/learn` | etiketli örneklerle toplu öğrenme `{"examples": [{"state": …, "answer": …}]}` |
+| `GET …/{name}/decisions?pending=true&uncertain_first=true` | canlı akış / aktif öğrenme kuyruğu |
+| `PUT …/{name}/rules` | sabit kurallar (JSON yolu, ör. `applicant.credit_score`, ya da `$text`) |
+| `GET …/{name}/feedback` · `POST /v1/feedback/{id}/retract` · `POST …/{name}/rebuild` | değiştirilemez log · hatalı etiketi geri çek · logdan yeniden kur |
+| `GET/POST …/{name}/snapshots` · `POST …/{name}/rollback` | sürümler ve geri alma |
+| `GET/PUT/DELETE /v1/teacher` · `POST /v1/teacher/test` | öğretmen ayarı (anahtar sadece bellekte) |
+| `POST /v1/datasets` · `POST /v1/datasets/{id}/train` · `POST /v1/datasets/{id}/distill` | yükle · eğit · öğretmene etiketlet |
+| `POST /v1/generate/design` · `POST /v1/generate/examples` | LLM ile soru tasarla · örnek üret (+ eğit) |
+| `GET /v1/jobs/{id}` · `WS /ws` | arka plan işleri · canlı olaylar |
 
-Python içinde doğrudan da kullanılabilir:
+Etkileşimli referans: `http://127.0.0.1:8000/docs`. Python içinden doğrudan: `desic.service.Desic`.
 
-```python
-from desic.service import Desic
-from desic.core import Schema, Feature
+## Öğrenci nasıl çalışıyor? (`desic/core`)
 
-desic = Desic("./data")
-desic.create_model("churn", Schema([Feature("tenure"), Feature("plan", "categorical")], target="churn"))
-d = desic.decide("churn", {"tenure": 3, "plan": "basic"})
-desic.feedback("churn", d["id"], "yes")
-```
+Saf Python, ek ML bağımlılığı yok. Her soru için ayrı bir öğrenci:
+
+| Parça | Ne yapar |
+|---|---|
+| **Özellikler** (`features.py`) | Metin: kelime, 5 harflik kök (Türkçe gibi eklemeli diller için hafif stemmer), bigram; büyük/küçük ve ASCII katlama (`şikayet` = `sikayet`). JSON: `customer.plan=pro` gibi alanlar, standartlaştırılmış sayılar. |
+| **linear** uzmanı | Çevrimiçi softmax regresyon, log loss + AdaGrad (öğrenme hızı tabanı sayesinde drift'e uyum). Öğretmenden gelen *yumuşak* olasılıkları da öğrenir. |
+| **tree** uzmanı | JSON alanları üzerinde Hoeffding ağacı (VFDT) + DDM drift dedektörü; `credit_score > 1445` gibi eşikler. |
+| **memory** uzmanı | En yakın etiketli örnekler (ters indeksli kosinüs). **Sıcak katman**: tek bir düzeltme, aynı/benzer durum için bir sonraki cevabı hemen değiştirir. |
+| **prior** uzmanı | Temel oranlar. |
+| **Karışım** (`experts.py`) | Log loss üzerinde Hedge (η=1 → Bayesçi karışım), *uyuyan uzmanlar* ve *fixed share* ile drift'ten sonra hızlı toparlanma. Log loss kesin uygun (strictly proper) bir skorlama kuralı: uzmanlar dürüst olasılık için ödüllenir. |
+| **Kalibrasyon** (`calibration.py`) | Son 500 etiket üzerinde çevrimiçi sıcaklık ölçekleme; T ∈ [0.5, 4] ile sınırlı (tanıdık veride öğrenilen sıcaklık, hiç görülmemiş girdide aşırı güven üretmesin). |
+| **Tanıdıklık** | State'teki kanıtın ne kadarı eğitimde görüldü? %50'nin altındaysa dağılım "bilmiyorum"a çekilir → çekimser kalır → öğretmene gider. |
+| **Ölçüm** | Prequential: her insan etiketi, kullanıcıya *gösterilmiş* olasılıklarla öğrenilmeden önce puanlanır. Accuracy, NLL, Brier, ECE, RPS (score), güvenilirlik diyagramı, risk–coverage, abstain ve öğretmen oranı. Öğretmen etiketleri metriğe girmez. |
+
+### Jev / Laya ile karşılaştırma
+
+| | Jev | Laya | Desic |
+|---|---|---|---|
+| Arayüz | state + choice/score/noul | aynı | aynı (Jev istek biçimi) |
+| Model | kapalı, hosted | ModernBERT + decision head (421M) | çevrimiçi uzman karışımı (küçük, CPU, saf Python) |
+| Sıfırdan (zero-shot) bilgi | güçlü | orta | yok: öğretmen + veri ile öğrenir |
+| Kullanıcı geri bildiriminden öğrenme | hayır (müşteri fine-tune yok) | offline fine-tune | **her geri bildirimde, anında** |
+| Kalibrasyon | RLCD | proper scoring + sıcaklık | log-loss Hedge + çevrimiçi sıcaklık + tanıdıklık |
+| Çekimser kalma / yükseltme | eşik kodda | act/escalate head | birinci sınıf `abstain` + otomatik öğretmen |
+| Güvenlik | — | — | değiştirilemez log, retract, rebuild, snapshot/rollback |
+
+Desic, Laya'yı (Jev-uyumlu bir sunucu arkasında) **öğretmen** olarak kullanabilir: Laya'nın zero-shot bilgisi + Desic'in anlık öğrenmesi.
+
+## Veri
+
+- **Kendi verin:** CSV/TSV/JSON/JSONL (≤ 50 MB). Cevap kolonunu ve state kolonlarını seç; state metin (kolonlar birleştirilir) ya da JSON nesnesi olur. Hold-out ile kalibrasyon dahil değerlendirme.
+- **Distill:** etiketsiz satırları öğretmen etiketler, öğrenci onun olasılıklarından öğrenir (System 2 → System 1).
+- **Üret:** kararı düz metinle anlat → LLM soruyu tasarlar (tip, cevaplar, state biçimi, uzman kuralları) → düzenle → örnekler 20'lik gruplar halinde yazılır, şemaya göre doğrulanır → istersen hemen eğitilir.
+- Anahtarlar yalnızca sunucu belleğinde (ve istersen tarayıcında) tutulur; veritabanına ve loglara yazılmaz.
 
 ## Geliştirme
 
 ```bash
 pip install -e '.[dev]'
-pytest
+pytest                      # 41 test: çekirdek, API, öğretmen/üretim (sahte sağlayıcılarla)
 desic serve --reload
 ```
 
 ```
 desic/
-  core/       stats.py · tree.py · drift.py · model.py · rules.py · schema.py   ← öğrenme motoru
-  service.py  modeller, kararlar, geri bildirim, işler, olay yayını
-  storage.py  SQLite (modeller pickle olarak, karar günlüğü, veri setleri)
-  generation.py  LLM ile şema tasarımı ve veri üretimi
-  api.py      FastAPI + WebSocket
-  static/     dashboard (bağımlılıksız HTML/CSS/JS)
+  core/        features · experts · calibration · task · tree · model (adaptif ağaç) · drift · rules
+  service.py   kararlar, feedback, öğretmen, işler, snapshot/rebuild
+  llm.py       öğretmen sağlayıcıları (Anthropic SDK, OpenAI-uyumlu, Jev-uyumlu)
+  generation.py  LLM ile soru tasarımı ve örnek üretimi
+  storage.py   SQLite: öğrenciler, snapshot'lar, kararlar, feedback log, veri setleri
+  api.py       FastAPI + WebSocket
+  static/      dashboard (bağımlılıksız HTML/CSS/JS)
 ```
 
 ## Yol haritası
 
-- Regresyon (sayısal karar) için Hoeffding regresyon ağacı
-- Kullanıcı/rol yönetimi ve API anahtarları (şu an yerel/güvenilir ağ için tasarlandı)
-- LLM'i "öğretmen" olarak kullanma: düşük güvenli kararları AI'ın etiketlemesi, insanın onaylaması
-- Sıcak yolu (ağaç içinden geçiş, istatistik güncelleme) C++ / pybind11 ile hızlandırma
-- Model sürümleme ve A/B karşılaştırma
+- **Yavaş katman:** feedback log'dan periyodik olarak nöral bir öğrenci (ModernBERT/mmBERT + option-marker decision head, Laya tarzı) fine-tune etmek; aday → offline değerlendirme → gölge/kanarya → terfi. Mevcut çevrimiçi uzmanlar "hızlı katman" olarak kalır.
+- RLCD tarzı eğitim: gürültülü logit keşfi + proper scoring ödülü + grup-ortalama baseline.
+- Multi-label ve sıralama (rank) primitive'leri, hiyerarşik choice (255+ seçenek).
+- Sıcak yolun (özellik çıkarma, uzman skorlama) C++/pybind11 ile hızlandırılması.
+- Kimlik doğrulama ve API anahtarları (şu an yerel/güvenilir ağ için; `desic serve` varsayılan olarak yalnızca `127.0.0.1`'i dinler).
 
-> ⚠️ Desic şu an kimlik doğrulaması olmadan çalışır; `desic serve` varsayılan olarak yalnızca `127.0.0.1`'i dinler. İnternete açmadan önce önüne bir kimlik doğrulama katmanı koyun. Model durumları `pickle` ile saklanır; yalnızca kendi oluşturduğunuz veri klasörlerini yükleyin.
+> Öğrenci durumları `pickle` ile saklanır; yalnızca kendi oluşturduğunuz veri klasörlerini yükleyin.
 
 ---
 
 ### English summary
 
-Desic is a self-learning, explainable decision engine: an incremental Hoeffding tree (or adaptive random forest) with DDM drift detection learns from every piece of user feedback in real time, while priority-ordered hard rules give rule-engine style control. It ships with a realtime dashboard (live decision feed, prequential accuracy chart, tree/rule views, active-learning review queue), dataset upload/training, and synthetic dataset generation using your own Anthropic or OpenAI-compatible API key (keys are never stored). `pip install -e . && desic demo && desic serve`.
+Desic is a self-learning **typed-decision (System One) engine**: like Jev and Laya it takes a state plus typed questions (`choice`, `score`, `noul`) and returns calibrated probability distributions, never free text. Unlike them it learns from **every piece of feedback in real time** (a mixture of online experts — linear, Hoeffding tree, nearest-neighbour memory, prior — combined by log-loss Hedge with fixed share, then temperature-calibrated), **abstains** when unsure or when the input is unfamiliar, and can escalate to a **teacher** (Claude, any OpenAI-compatible LLM, or a Jev-compatible API such as a self-hosted Laya) whose answers are distilled back into the student. Feedback is an append-only log with retract / rebuild / snapshot / rollback. The dashboard shows ECE, Brier, NLL, reliability diagrams and risk–coverage curves. `pip install -e . && desic demo && desic serve`.
 
 MIT License.

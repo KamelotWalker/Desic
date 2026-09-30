@@ -1,17 +1,20 @@
-"""Desic application service: models, decisions, feedback, datasets and jobs.
+"""Desic application service: typed decisions, feedback, teacher, data and jobs.
 
-The HTTP layer (api.py) is a thin wrapper around this class, so the same
-engine can be embedded in any Python program:
+The HTTP layer (api.py) is a thin wrapper, so the engine can be embedded:
 
     desic = Desic("./data")
-    desic.create_model("loan", schema)
-    d = desic.decide("loan", {"income": 4200, "age": 31})
-    desic.feedback("loan", d["id"], "approve")
+    r = await desic.decide("I was charged twice", {
+        "department": {"type": "choice", "criteria": {"billing": "", "technical": "", "sales": ""}},
+    })
+    desic.feedback(r["id"], {"department": "billing"})
 """
 
 from __future__ import annotations
 
 import asyncio
+import copy
+import json
+import os
 import random
 import threading
 import time
@@ -20,16 +23,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .core.model import DecisionModel
+from .core.features import state_text
 from .core.rules import first_match, validate_rule
-from .core.schema import Schema, to_label
+from .core.schema import to_label, to_number
+from .core.task import CHOICE, NOUL, SCORE, DecisionTask, QuestionSpec, SpecError
+from .generation import design_task, generate_examples, normalize_design
+from .llm import LLMError, ProviderConfig, make_provider, teacher_answer
 from .storage import Storage
 
-SAVE_EVERY = 25  # persist after this many learning steps
-
-
-def _new_counters() -> dict:
-    return {"decisions": 0, "feedback": 0, "final_correct": 0, "rule_decisions": 0}
+SAVE_EVERY = 20          # persist a task after this many changes
+SNAPSHOT_EVERY = 250     # automatic snapshot every N labels
+MAX_STATE_BYTES = 64_000
 
 
 class NotFound(KeyError):
@@ -78,270 +82,428 @@ class Job:
         return {k: getattr(self, k) for k in ("id", "kind", "status", "progress", "message", "result", "error", "created_at")}
 
 
-@dataclass
-class ModelRuntime:
-    name: str
-    schema: Schema
-    model: DecisionModel
-    description: str = ""
-    rules: list[dict] = field(default_factory=list)
-    counters: dict = field(default_factory=_new_counters)
-    created_at: float = field(default_factory=time.time)
-    lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
-    dirty: int = 0
+def teacher_from_env() -> ProviderConfig | None:
+    provider = os.environ.get("DESIC_TEACHER_PROVIDER", "")
+    key = os.environ.get("DESIC_TEACHER_API_KEY", "")
+    if not provider and os.environ.get("ANTHROPIC_API_KEY"):
+        provider = "anthropic"
+    if not provider:
+        return None
+    return ProviderConfig(provider, key, os.environ.get("DESIC_TEACHER_MODEL", ""), os.environ.get("DESIC_TEACHER_BASE_URL", ""))
 
 
 class Desic:
-    def __init__(self, data_dir: str | Path = "data", db_name: str = "desic.db") -> None:
+    def __init__(self, data_dir: str | Path = "data", db_name: str = "desic.db", teacher: ProviderConfig | None = None) -> None:
         path = ":memory:" if str(data_dir) == ":memory:" else Path(data_dir) / db_name
         self.storage = Storage(path)
         self.bus = EventBus()
         self.jobs: dict[str, Job] = {}
-        self.runtimes: dict[str, ModelRuntime] = {}
-        for rec in self.storage.load_models():
-            model = rec["state"] or DecisionModel(rec["kind"])
-            self.runtimes[rec["name"]] = ModelRuntime(
-                name=rec["name"],
-                schema=Schema.from_dict(rec["schema"]),
-                model=model,
-                description=rec["description"],
-                rules=rec["rules"],
-                counters={**_new_counters(), **rec["meta"].get("counters", {})},
-                created_at=rec["created_at"],
-            )
+        self.tasks: dict[str, DecisionTask] = {t.spec.name: t for t in self.storage.load_tasks()}
+        self.locks: dict[str, threading.RLock] = {}
+        self.dirty: dict[str, int] = {}
+        self.teacher_cfg: ProviderConfig | None = teacher if teacher is not None else teacher_from_env()
+        self.teacher_stats = {"calls": 0, "errors": 0, "last_error": None, "last_call": None}
+        self._provider = None
+        self._background: set[asyncio.Task] = set()
 
-    # ------------------------------------------------------------- persistence
-    def persist(self, rt: ModelRuntime) -> None:
-        with rt.lock:
-            self.storage.save_model(
-                rt.name, rt.model.kind, rt.description, rt.schema.to_dict(), rt.rules,
-                {"counters": rt.counters}, rt.model,
-            )
-            rt.dirty = 0
+    # ------------------------------------------------------------- utilities
+    def lock(self, name: str) -> threading.RLock:
+        return self.locks.setdefault(name, threading.RLock())
+
+    def get(self, name: str) -> DecisionTask:
+        task = self.tasks.get(name)
+        if task is None:
+            raise NotFound(f"question {name!r} not found")
+        return task
+
+    def persist(self, task: DecisionTask) -> None:
+        with self.lock(task.spec.name):
+            self.storage.save_task(task.spec.name, task.spec.to_dict(), task)
+            self.dirty[task.spec.name] = 0
 
     def persist_all(self) -> None:
-        for rt in self.runtimes.values():
-            if rt.dirty:
-                self.persist(rt)
+        for name, n in list(self.dirty.items()):
+            if n and name in self.tasks:
+                self.persist(self.tasks[name])
 
-    def _touch(self, rt: ModelRuntime, n: int = 1) -> None:
-        rt.dirty += n
-        if rt.dirty >= SAVE_EVERY:
-            self.persist(rt)
+    def _touch(self, task: DecisionTask, n: int = 1) -> None:
+        name = task.spec.name
+        before = task.labels - n
+        self.dirty[name] = self.dirty.get(name, 0) + n
+        if before // SNAPSHOT_EVERY != task.labels // SNAPSHOT_EVERY:
+            self.snapshot(name, note="automatic")
+        if self.dirty[name] >= SAVE_EVERY:
+            self.persist(task)
 
-    # ------------------------------------------------------------------ models
-    def get(self, name: str) -> ModelRuntime:
-        rt = self.runtimes.get(name)
-        if rt is None:
-            raise NotFound(f"model {name!r} not found")
-        return rt
+    @staticmethod
+    def check_state(state: Any) -> Any:
+        if state is None or (isinstance(state, str) and not state.strip()):
+            raise ValueError("state is required (text or a JSON object)")
+        if not isinstance(state, (str, dict, list)):
+            state = str(state)
+        if len(json.dumps(state, ensure_ascii=False)) > MAX_STATE_BYTES:
+            raise ValueError(f"state is larger than {MAX_STATE_BYTES // 1000} kB; send only what the decision needs")
+        return state
 
-    def create_model(self, name: str, schema: Schema, kind: str = "tree", params: dict | None = None,
-                     description: str = "") -> ModelRuntime:
-        name = name.strip()
-        if not name:
-            raise ValueError("model name is required")
-        if name in self.runtimes:
-            raise Conflict(f"model {name!r} already exists")
-        if not schema.features:
-            raise ValueError("a model needs at least one feature")
-        if schema.target in schema.feature_names:
-            raise ValueError("the target cannot also be a feature")
-        rt = ModelRuntime(name=name, schema=schema, model=DecisionModel(kind, params), description=description)
-        self.runtimes[name] = rt
-        self.persist(rt)
-        self.bus.publish({"type": "model_created", "model": name})
-        return rt
+    # ------------------------------------------------------------------ tasks
+    def create_task(self, spec: QuestionSpec, settings: dict | None = None) -> DecisionTask:
+        if spec.name in self.tasks:
+            raise Conflict(f"question {spec.name!r} already exists")
+        task = DecisionTask(spec, settings)
+        self.tasks[spec.name] = task
+        self.persist(task)
+        self.bus.publish({"type": "task_created", "task": spec.name})
+        return task
 
-    def delete_model(self, name: str) -> None:
+    def ensure_task(self, name: str, raw: dict | None) -> tuple[DecisionTask, list[str] | None]:
+        """Resolve a question from a request, registering or extending it on the fly."""
+        if not raw:
+            return self.get(name), None
+        spec = QuestionSpec.parse(name, raw)
+        task = self.tasks.get(name)
+        if task is None:
+            return self.create_task(spec), spec.option_names
+        with self.lock(name):
+            if task.spec.merge(spec):
+                self.dirty[name] = self.dirty.get(name, 0) + SAVE_EVERY  # persist the new spec soon
+        return task, spec.option_names
+
+    def update_task(self, name: str, patch: dict) -> dict:
+        task = self.get(name)
+        with self.lock(name):
+            if "instructions" in patch:
+                task.spec.instructions = str(patch["instructions"] or "")
+            if isinstance(patch.get("add_options"), list):
+                if task.spec.type != CHOICE:
+                    raise SpecError("only choice questions can gain options")
+                for o in patch["add_options"]:
+                    if str(o).strip():
+                        task.spec.options.setdefault(str(o).strip(), "")
+            if isinstance(patch.get("descriptions"), dict):
+                for k, v in patch["descriptions"].items():
+                    if k in task.spec.options:
+                        task.spec.options[k] = str(v or "")
+            settings = patch.get("settings") or {}
+            if "abstain_threshold" in settings:
+                t = float(settings["abstain_threshold"])
+                if not 0 <= t <= 1:
+                    raise ValueError("abstain_threshold must be between 0 and 1")
+                task.settings["abstain_threshold"] = t
+            if "teacher_mode" in settings:
+                if settings["teacher_mode"] not in ("off", "on_abstain", "always"):
+                    raise ValueError("teacher_mode must be off, on_abstain or always")
+                task.settings["teacher_mode"] = settings["teacher_mode"]
+            if "teacher_weight" in settings:
+                w = float(settings["teacher_weight"])
+                if not 0 <= w <= 1:
+                    raise ValueError("teacher_weight must be between 0 and 1")
+                task.settings["teacher_weight"] = w
+        self.persist(task)
+        self.bus.publish({"type": "task_updated", "task": name})
+        return self.task_detail(name)
+
+    def delete_task(self, name: str) -> None:
         self.get(name)
-        del self.runtimes[name]
-        self.storage.delete_model(name)
-        self.bus.publish({"type": "model_deleted", "model": name})
+        del self.tasks[name]
+        self.storage.delete_task(name)
+        self.bus.publish({"type": "task_deleted", "task": name})
 
-    def reset_model(self, name: str) -> None:
-        rt = self.get(name)
-        with rt.lock:
-            rt.model.reset()
-            rt.counters = _new_counters()
-        self.persist(rt)
-        self.bus.publish({"type": "model_reset", "model": name})
+    def reset_task(self, name: str) -> None:
+        old = self.get(name)
+        with self.lock(name):
+            fresh = DecisionTask(copy.deepcopy(old.spec), dict(old.settings))
+            fresh.rules = old.rules
+            self.tasks[name] = fresh
+        self.persist(fresh)
+        self.bus.publish({"type": "task_reset", "task": name})
 
-    def list_models(self) -> list[dict]:
-        return [self.model_card(rt) for rt in self.runtimes.values()]
-
-    def model_card(self, rt: ModelRuntime) -> dict:
-        m = rt.model.metrics.summary()
+    def task_card(self, task: DecisionTask) -> dict:
+        m = task.metrics.summary()
         return {
-            "name": rt.name,
-            "description": rt.description,
-            "kind": rt.model.kind,
-            "target": rt.schema.target,
-            "classes": rt.schema.classes,
-            "n_features": len(rt.schema.features),
-            "learned": rt.model.n_learned,
-            "accuracy": m["accuracy"],
-            "rolling_accuracy": m["rolling_accuracy"],
-            "decisions": rt.counters["decisions"],
-            "created_at": rt.created_at,
+            "name": task.spec.name, "type": task.spec.type, "instructions": task.spec.instructions,
+            "options": task.spec.option_names, "labels": task.labels, "accuracy": m["accuracy"], "ece": m["ece"],
+            "abstain_rate": m["abstain_rate"], "teacher_rate": m["teacher_rate"], "decisions": m["decisions"],
+            "created_at": task.created_at,
         }
 
-    def model_detail(self, name: str) -> dict:
-        rt = self.get(name)
-        with rt.lock:
-            metrics = rt.model.metrics.summary()
-            fb = rt.counters["feedback"]
+    def list_tasks(self) -> list[dict]:
+        return [self.task_card(t) for t in self.tasks.values()]
+
+    def task_detail(self, name: str) -> dict:
+        task = self.get(name)
+        with self.lock(name):
             return {
-                **self.model_card(rt),
-                "params": rt.model.params,
-                "schema": rt.schema.to_dict(),
-                "structure": rt.model.structure(),
-                "metrics": metrics,
-                "history": rt.model.metrics.history,
-                "importance": rt.model.feature_importance(),
-                "events": rt.model.events[-30:],
-                "rules": rt.rules,
-                "counters": {
-                    **rt.counters,
-                    "pending": self.storage.count_pending(name),
-                    "decision_accuracy": round(rt.counters["final_correct"] / fb, 4) if fb else None,
-                },
+                **task.summary(),
+                "metrics": task.metrics.summary(),
+                "history": task.metrics.history,
+                "events": task.events[-30:],
+                "rules": task.rules,
+                "served": getattr(task, "served", {"labels": 0, "correct": 0}),
+                "pending": self.storage.count_pending(name),
+                "log": self.storage.event_counts(name),
             }
 
-    def tree(self, name: str, member: int | None = None) -> dict:
-        rt = self.get(name)
-        with rt.lock:
-            return rt.model.tree_dict(member)
+    # -------------------------------------------------------------- decisions
+    async def decide(self, state: Any, questions: dict[str, Any], record: bool = True, explain: bool = False,
+                     escalate: str = "auto", abstain_threshold: float | None = None) -> dict:
+        state = self.check_state(state)
+        if not questions:
+            raise ValueError("ask at least one question")
+        if escalate not in ("auto", "never", "always"):
+            raise ValueError("escalate must be auto, never or always")
+        decision_id = "dec_" + uuid.uuid4().hex[:20]
+        answers: dict[str, dict] = {}
+        stored: dict[str, dict] = {}
+        teacher_jobs: list[str] = []
+        for name, raw in questions.items():
+            task, options = self.ensure_task(name, raw if isinstance(raw, dict) else None)
+            with self.lock(name):
+                internal = task.answer(state, options)
+                pub = task.public(internal, abstain_threshold)
+                exp = task.explain(internal) if explain else None
+                rule = first_match(task.rules, {**internal["feats"].flat, "$text": state_text(state)})
+            student = {"probabilities": internal["probabilities"], "raw": internal["raw"], "abstain": pub["abstain"],
+                       "answer": _answer_label(pub)}
+            source = "student"
+            if rule is not None and rule["decision"] in internal["options"]:
+                pub = _force_answer(task, pub, rule["decision"])
+                source = "rule"
+                with self.lock(name):
+                    rule["hits"] = rule.get("hits", 0) + 1
+            pub["source"] = source
+            if rule is not None and source == "rule":
+                pub["rule"] = {"id": rule["id"], "name": rule["name"]}
+            if exp is not None:
+                pub["explanation"] = exp
+            answers[name] = pub
+            stored[name] = {"student": student, "options": internal["options"]}
+            mode = task.settings.get("teacher_mode", "on_abstain")
+            wants = escalate == "always" or (escalate == "auto" and (mode == "always" or (mode == "on_abstain" and pub["abstain"])))
+            if source != "rule" and wants and self.teacher_cfg is not None:
+                teacher_jobs.append(name)
 
-    def learned_rules(self, name: str, limit: int = 100) -> list[dict]:
-        rt = self.get(name)
-        with rt.lock:
-            return rt.model.rules()[:limit]
+        if teacher_jobs:
+            results = await asyncio.gather(*(self._ask_teacher(state, self.tasks[n]) for n in teacher_jobs), return_exceptions=True)
+            for name, res in zip(teacher_jobs, results):
+                task = self.tasks[name]
+                if isinstance(res, BaseException):
+                    answers[name]["teacher_error"] = str(res)
+                    continue
+                dist, rationale = res
+                opts = stored[name]["options"]
+                sub = {o: dist.get(o, 0.0) for o in opts}
+                s = sum(sub.values()) or 1.0
+                internal = {"probabilities": {o: v / s for o, v in sub.items()}, "weights": {"teacher": 1.0}}
+                pub = task.public(internal, 0.0)
+                pub["source"] = "teacher"
+                if rationale:
+                    pub["rationale"] = rationale
+                if "explanation" in answers[name]:
+                    pub["explanation"] = answers[name]["explanation"]
+                pub["student"] = {k: answers[name][k] for k in ("confidence", "abstain") if k in answers[name]}
+                answers[name] = pub
+                with self.lock(name):
+                    task.learn(state, dist, source="teacher", ref=decision_id)
+                self.storage.add_event(name, state, dist, "teacher", task.settings["teacher_weight"], decision_id)
+                self._touch(task)
 
-    # --------------------------------------------------------------- decisions
-    def decide(self, name: str, raw: dict, record: bool = True) -> dict:
-        rt = self.get(name)
-        x = rt.schema.coerce(raw)
-        with rt.lock:
-            result = rt.model.predict(x)
-            explanation = rt.model.explain(x) if rt.model.n_learned else {"path": []}
-            rule = first_match(rt.rules, x)
-            if rule is not None:
-                rule["hits"] = rule.get("hits", 0) + 1
-                source, prediction = "rule", rule["decision"]
-            elif result["prediction"] is not None:
-                source, prediction = "model", result["prediction"]
-            else:
-                source, prediction = "none", None
-            if record:
-                rt.counters["decisions"] += 1
-                if source == "rule":
-                    rt.counters["rule_decisions"] += 1
-        decision = {
-            "id": uuid.uuid4().hex,
-            "model": name,
-            "created_at": time.time(),
-            "features": x,
-            "prediction": prediction,
-            "model_prediction": result["prediction"],
-            "confidence": 1.0 if source == "rule" else result["confidence"],
-            "probabilities": result["probabilities"],
-            "source": source,
-            "rule_id": rule["id"] if rule else None,
-        }
+        for name, pub in answers.items():
+            task = self.tasks[name]
+            with self.lock(name):
+                task.metrics.record_decision(stored[name]["student"]["abstain"], pub["source"] == "teacher")
+            stored[name].update({k: v for k, v in pub.items() if k != "explanation"})
+            stored[name]["answer_label"] = _answer_label(pub)
         if record:
-            self.storage.insert_decision(decision)
-            self._touch(rt)
-            self.bus.publish({"type": "decision", "model": name, "decision": decision})
-        decision["explanation"] = explanation
-        if rule:
-            decision["rule"] = {"id": rule["id"], "name": rule["name"]}
-        return decision
+            rows = [(n, stored[n]["answer_label"], pub["confidence"], stored[n]["student"]["abstain"], pub["source"])
+                    for n, pub in answers.items()]
+            self.storage.insert_decision(decision_id, time.time(), state, stored, rows)
+            for n in answers:
+                self.dirty[n] = self.dirty.get(n, 0) + 1
+            self.bus.publish({"type": "decision", "id": decision_id, "state": _preview(state),
+                              "answers": {n: {k: v for k, v in a.items() if k != "explanation"} for n, a in answers.items()}})
+        return {"id": decision_id if record else None, "answers": answers}
 
-    def feedback(self, name: str, decision_id: str, label: Any) -> dict:
-        rt = self.get(name)
-        label = to_label(label)
-        if label is None:
-            raise ValueError("label is required")
+    async def _ask_teacher(self, state: Any, task: DecisionTask) -> tuple[dict, str]:
+        self.teacher_stats["calls"] += 1
+        self.teacher_stats["last_call"] = time.time()
+        try:
+            return await teacher_answer(self.provider(), state, task.spec)
+        except Exception as e:
+            self.teacher_stats["errors"] += 1
+            self.teacher_stats["last_error"] = str(e)[:300]
+            raise
+
+    def feedback(self, decision_id: str, answers: dict[str, Any], source: str = "human") -> dict:
+        if source not in ("human", "system"):
+            raise ValueError("feedback source must be human or system")
         d = self.storage.get_decision(decision_id)
-        if d is None or d["model"] != name:
+        if d is None:
             raise NotFound(f"decision {decision_id!r} not found")
-        if d["label"] is not None:
-            raise Conflict("this decision already has feedback")
-        correct = d["prediction"] == label
-        with rt.lock:
-            rt.schema.observe_label(label)
-            rt.schema.observe_row(d["features"])
-            events = rt.model.learn(d["features"], label, evaluated_prediction=d["model_prediction"])
-            rt.counters["feedback"] += 1
-            rt.counters["final_correct"] += int(correct)
-            if d["rule_id"]:
-                for r in rt.rules:
-                    if r["id"] == d["rule_id"]:
-                        key = "confirmed" if correct else "overridden"
-                        r[key] = r.get(key, 0) + 1
-            metrics = rt.model.metrics.summary()
-        self.storage.set_feedback(decision_id, label, correct)
-        self._touch(rt)
-        self._publish_learning(rt, events, metrics)
-        self.bus.publish({"type": "feedback", "model": name, "decision_id": decision_id, "label": label, "correct": correct})
-        return {"decision_id": decision_id, "label": label, "correct": correct, "metrics": _brief(metrics)}
+        if not answers:
+            raise ValueError("give the correct answer for at least one question")
+        out = {}
+        for name, value in answers.items():
+            if name not in d["answers"]:
+                raise ValueError(f"decision {decision_id} did not ask {name!r}")
+            if d["labels"].get(name) is not None:
+                raise Conflict(f"{name!r} already has feedback for this decision")
+            task = self.get(name)
+            stored = d["answers"][name]
+            with self.lock(name):
+                label = task.spec.label_of(value)
+                student = stored.get("student", {})
+                events = task.learn(d["state"], label, source="human" if source == "human" else "dataset",
+                                    served=student.get("probabilities"), served_raw=student.get("raw"),
+                                    abstained=bool(student.get("abstain")), ref=decision_id)
+                served = task.__dict__.setdefault("served", {"labels": 0, "correct": 0})
+                served["labels"] += 1
+                correct = stored.get("answer_label") == label
+                served["correct"] += int(correct)
+                metrics = task.metrics.summary()
+            self.storage.add_event(name, d["state"], label, source, 1.0, decision_id)
+            self.storage.set_answer_label(decision_id, name, label)
+            self._touch(task)
+            for ev in events:
+                self.bus.publish({"type": "drift", "task": name, "event": ev})
+            self.bus.publish({"type": "feedback", "task": name, "decision_id": decision_id, "label": label, "correct": correct,
+                              "metrics": _brief(metrics), "point": task.metrics.history[-1] if task.metrics.history else None})
+            out[name] = {"label": label, "correct": correct,
+                         "student_correct": student.get("answer") == label, "metrics": _brief(metrics)}
+        return {"decision_id": decision_id, "answers": out}
 
-    def decisions(self, name: str, limit: int = 50, pending: bool = False, uncertain_first: bool = False) -> list[dict]:
-        self.get(name)
-        return self.storage.list_decisions(name, limit, pending, uncertain_first)
-
-    def learn(self, name: str, rows: list[dict]) -> dict:
-        """Learn from already-labelled rows (each row contains the target column)."""
-        rt = self.get(name)
-        n, skipped, events = self._learn_rows(rt, rows)
-        metrics = rt.model.metrics.summary()
-        self._touch(rt, n)
-        self._publish_learning(rt, events, metrics)
-        return {"learned": n, "skipped": skipped, "metrics": _brief(metrics)}
-
-    def _learn_rows(self, rt: ModelRuntime, rows: list[dict]) -> tuple[int, int, list[dict]]:
+    def learn(self, name: str, examples: list[dict], source: str = "dataset", record: bool = True) -> dict:
+        """Learn from labelled examples: [{"state": ..., "answer": ...}, ...]."""
+        task = self.get(name)
         n = skipped = 0
+        rows = []
         events: list[dict] = []
-        with rt.lock:
-            for row in rows:
-                y = to_label(row.get(rt.schema.target))
-                if y is None:
+        with self.lock(name):
+            for ex in examples:
+                state = ex.get("state")
+                value = ex.get("answer", ex.get("label"))
+                if state in (None, "") or value is None:
                     skipped += 1
                     continue
-                x = rt.schema.coerce(row)
-                rt.schema.observe_label(y)
-                rt.schema.observe_row(x)
-                events += rt.model.learn(x, y)
+                try:
+                    label = task.spec.label_of(value)
+                except SpecError:
+                    skipped += 1
+                    continue
+                events += task.learn(state, label, source=source)
+                rows.append((name, None, state, label, source, 1.0))
                 n += 1
-        return n, skipped, events
-
-    def _publish_learning(self, rt: ModelRuntime, events: list[dict], metrics: dict) -> None:
+            metrics = task.metrics.summary()
+        if record and rows:
+            self.storage.add_events(rows)
+        self._touch(task, n)
         for ev in events:
-            self.bus.publish({"type": "drift", "model": rt.name, "event": ev})
-        self.bus.publish({
-            "type": "metrics",
-            "model": rt.name,
-            "learned": rt.model.n_learned,
-            "metrics": _brief(metrics),
-            "point": rt.model.metrics.history[-1] if rt.model.metrics.history else None,
-        })
+            self.bus.publish({"type": "drift", "task": name, "event": ev})
+        self.bus.publish({"type": "learned", "task": name, "n": n, "metrics": _brief(metrics),
+                          "point": task.metrics.history[-1] if task.metrics.history else None})
+        return {"learned": n, "skipped": skipped, "metrics": _brief(metrics)}
+
+    def answers(self, name: str, limit: int = 50, pending: bool = False, uncertain_first: bool = False) -> list[dict]:
+        self.get(name)
+        return self.storage.list_answers(name, limit, pending, uncertain_first)
 
     # ------------------------------------------------------------------- rules
     def set_rules(self, name: str, rules: list[dict]) -> list[dict]:
-        rt = self.get(name)
+        task = self.get(name)
         validated = [validate_rule(r) for r in rules]
-        with rt.lock:
-            old = {r["id"]: r for r in rt.rules}
-            for r in validated:  # keep live counters for rules that already existed
+        for r in validated:
+            if r["decision"] not in task.spec.options:
+                raise ValueError(f"rule {r['name'] or r['id']}: {r['decision']!r} is not an answer of {name}")
+        with self.lock(name):
+            old = {r["id"]: r for r in task.rules}
+            for r in validated:
                 prev = old.get(r["id"])
                 if prev:
-                    for key in ("hits", "confirmed", "overridden"):
-                        r[key] = prev.get(key, 0)
-            rt.rules = validated
-        self.persist(rt)
-        self.bus.publish({"type": "rules", "model": name})
-        return rt.rules
+                    r["hits"] = prev.get("hits", 0)
+            task.rules = validated
+        self.persist(task)
+        self.bus.publish({"type": "task_updated", "task": name})
+        return task.rules
+
+    # ------------------------------------------------ snapshots / audit / replay
+    def snapshot(self, name: str, note: str = "") -> dict:
+        task = self.get(name)
+        with self.lock(name):
+            m = task.metrics.summary()
+            brief = {k: m[k] for k in ("accuracy", "nll", "ece", "labels")}
+            self.storage.save_snapshot(name, task.version, task.labels, brief, task, note)
+        return {"task": name, "version": task.version, "labels": task.labels, "metrics": brief, "note": note}
+
+    def rollback(self, name: str, version: int) -> dict:
+        self.get(name)
+        restored = self.storage.load_snapshot(name, version)
+        if restored is None:
+            raise NotFound(f"snapshot {version} of {name!r} not found")
+        with self.lock(name):
+            self.tasks[name] = restored
+        self.persist(restored)
+        self.bus.publish({"type": "task_reset", "task": name})
+        return self.task_detail(name)
+
+    def retract(self, event_id: int, retracted: bool = True) -> dict:
+        ev = self.storage.get_event(event_id)
+        if ev is None:
+            raise NotFound(f"feedback event {event_id} not found")
+        self.storage.set_retracted(event_id, retracted)
+        return {**ev, "retracted": retracted, "hint": "run a rebuild to remove its influence from the student"}
+
+    async def rebuild(self, job: Job, name: str, exclude_sources: list[str] | None = None) -> None:
+        """Replay the feedback log into a fresh student (skipping retracted / excluded events)."""
+        try:
+            old = self.get(name)
+            exclude = set(exclude_sources or [])
+            events = [e for e in self.storage.iter_events(name) if e["source"] not in exclude]
+            fresh = DecisionTask(copy.deepcopy(old.spec), dict(old.settings))
+            fresh.rules = old.rules
+
+            def replay(chunk: list[dict]) -> None:
+                for e in chunk:
+                    source = {"system": "dataset"}.get(e["source"], e["source"])
+                    fresh.learn(e["state"], e["label"], source=source, weight=e["weight"])
+
+            for i in range(0, len(events), 250):
+                await asyncio.to_thread(replay, events[i:i + 250])
+                self.update_job(job, progress=round(min((i + 250) / max(len(events), 1), 1.0), 4),
+                                message=f"replayed {min(i + 250, len(events))}/{len(events)} events")
+            self.snapshot(name, note="before rebuild")
+            with self.lock(name):
+                self.tasks[name] = fresh
+            self.persist(fresh)
+            self.bus.publish({"type": "task_reset", "task": name})
+            self.update_job(job, status="done", progress=1.0, message="rebuild finished",
+                            result={"task": name, "replayed": len(events), "metrics": _brief(fresh.metrics.summary())})
+        except Exception as e:
+            self.update_job(job, status="error", error=str(e) or type(e).__name__)
+
+    # ----------------------------------------------------------------- teacher
+    def set_teacher(self, cfg: ProviderConfig | None) -> dict:
+        if cfg is not None:
+            make_provider(cfg)  # validate
+        self.teacher_cfg = cfg
+        self._provider = None
+        self.bus.publish({"type": "teacher_updated"})
+        return self.teacher_public()
+
+    def teacher_public(self) -> dict:
+        return {"configured": self.teacher_cfg is not None,
+                **(self.teacher_cfg.public() if self.teacher_cfg else {}), "stats": self.teacher_stats}
+
+    def provider(self):
+        if self.teacher_cfg is None:
+            raise LLMError("no teacher configured: set an AI provider on the Teacher page or via DESIC_TEACHER_* env vars")
+        if self._provider is None:
+            self._provider = make_provider(self.teacher_cfg)
+        return self._provider
+
+    async def test_teacher(self) -> dict:
+        spec = QuestionSpec.parse("desic_self_test", {"type": NOUL, "instructions": "The message is a greeting."})
+        t0 = time.time()
+        dist, rationale = await teacher_answer(self.provider(), "Hello there, nice to meet you!", spec)
+        return {"ok": True, "p_true": round(dist["true"], 3), "rationale": rationale, "latency_ms": round((time.time() - t0) * 1000)}
 
     # ---------------------------------------------------------------- datasets
     def add_dataset(self, name: str, source: str, columns: list[str], rows: list[dict], meta: dict | None = None) -> dict:
@@ -357,17 +519,179 @@ class Desic:
         rows = self.storage.dataset_rows(ds_id, 2000)
         profile = {}
         for col in ds["columns"]:
-            try:
-                s = Schema.infer(rows, target="\0", features=[col])
-                f = s.features[0]
-                profile[col] = {"type": f.type, "values": f.values[:20]}
-            except ValueError:
-                profile[col] = {"type": "categorical", "values": []}
-            distinct = {to_label(r.get(col)) for r in rows} - {None}
-            profile[col]["distinct"] = len(distinct)
+            vals = [r.get(col) for r in rows if r.get(col) not in (None, "")]
+            distinct = list(dict.fromkeys(str(v) if not isinstance(v, (dict, list)) else json.dumps(v, ensure_ascii=False) for v in vals))
+            numeric = bool(vals) and all(to_number(v) is not None for v in vals if not isinstance(v, (dict, list)))
+            avg_len = sum(len(str(v)) for v in vals) / len(vals) if vals else 0
+            kind = "object" if any(isinstance(v, (dict, list)) for v in vals) else (
+                "number" if numeric else ("text" if avg_len > 40 else "category"))
+            profile[col] = {"type": kind, "distinct": len(distinct), "values": distinct[:12] if kind in ("category", "number") else []}
         return {**ds, "profile": profile, "preview": rows[:preview]}
 
+    def _examples(self, rows: list[dict], answer_col: str, state_cols: list[str], mode: str) -> list[dict]:
+        out = []
+        for r in rows:
+            value = r.get(answer_col)
+            if value in (None, ""):
+                continue
+            if mode == "text" or (mode == "auto" and len(state_cols) == 1 and not isinstance(r.get(state_cols[0]), (dict, list))
+                                  and len(str(r.get(state_cols[0], ""))) > 40):
+                state: Any = " \n".join(str(r.get(c, "")) for c in state_cols if r.get(c) not in (None, ""))
+            elif mode == "auto" and len(state_cols) == 1 and isinstance(r.get(state_cols[0]), (dict, list)):
+                state = r.get(state_cols[0])
+            else:
+                state = {c: _coerce(r.get(c)) for c in state_cols if r.get(c) not in (None, "")}
+            if state in ("", {}):
+                continue
+            out.append({"state": state, "answer": value})
+        return out
+
+    def _task_for_dataset(self, name: str, examples: list[dict], qtype: str, levels: list[str] | None,
+                          instructions: str) -> DecisionTask:
+        if name in self.tasks:
+            return self.tasks[name]
+        labels = list(dict.fromkeys(to_label(e["answer"]) for e in examples if to_label(e["answer"]) is not None))
+        if qtype == NOUL:
+            criteria: Any = ["true", "false"]
+        elif qtype == SCORE:
+            criteria = levels or sorted(labels, key=lambda v: (to_number(v) is None, to_number(v) or 0, v))
+        else:
+            criteria = labels
+        if len(criteria) > 255:
+            raise ValueError(f"the answer column has {len(criteria)} distinct values; a question allows at most 255")
+        spec = QuestionSpec.parse(name, {"type": qtype, "instructions": instructions, "criteria": criteria})
+        return self.create_task(spec)
+
+    async def train_from_dataset(self, job: Job, ds_id: str, task_name: str, answer_column: str,
+                                 state_columns: list[str] | None = None, state_mode: str = "auto", qtype: str = CHOICE,
+                                 levels: list[str] | None = None, instructions: str = "", holdout: float = 0.2) -> None:
+        try:
+            ds = self.storage.get_dataset(ds_id)
+            if ds is None:
+                raise NotFound(f"dataset {ds_id!r} not found")
+            if answer_column not in ds["columns"]:
+                raise ValueError(f"dataset has no column {answer_column!r}")
+            cols = [c for c in (state_columns or ds["columns"]) if c != answer_column and c in ds["columns"]]
+            if not cols:
+                raise ValueError("choose at least one state column")
+            examples = self._examples(self.storage.dataset_rows(ds_id), answer_column, cols, state_mode)
+            if not examples:
+                raise ValueError("no usable rows")
+            task = self._task_for_dataset(task_name, examples, qtype, levels, instructions)
+            random.Random(7).shuffle(examples)
+            holdout = min(max(float(holdout), 0.0), 0.5)
+            n_test = int(len(examples) * holdout)
+            train, test = examples[: len(examples) - n_test], examples[len(examples) - n_test:]
+            self.update_job(job, message=f"training {task.spec.name} on {len(train)} examples")
+            for i in range(0, len(train), 200):
+                await asyncio.to_thread(self.learn, task.spec.name, train[i:i + 200])
+                self.update_job(job, progress=round(min((i + 200) / len(train), 1.0) * (0.9 if test else 1.0), 4),
+                                message=f"learned {min(i + 200, len(train))}/{len(train)}")
+            result: dict[str, Any] = {"task": task.spec.name, "trained": len(train)}
+            if test:
+                result["holdout"] = await asyncio.to_thread(self.evaluate, task.spec.name, test)
+            self.persist(task)
+            self.update_job(job, status="done", progress=1.0, result=result, message="training finished")
+        except Exception as e:
+            self.update_job(job, status="error", error=str(e) or type(e).__name__)
+
+    def evaluate(self, name: str, examples: list[dict]) -> dict:
+        """Score examples without learning from them (accuracy, NLL, ECE)."""
+        from .core.calibration import TaskMetrics
+
+        task = self.get(name)
+        m = TaskMetrics(window=len(examples) + 1)
+        with self.lock(name):
+            for ex in examples:
+                try:
+                    label = task.spec.label_of(ex["answer"])
+                except SpecError:
+                    continue
+                internal = task.answer(ex["state"])
+                m.update(internal["probabilities"], label, task.public(internal)["abstain"],
+                         task.spec.option_names if task.spec.type == SCORE else None)
+        s = m.summary()
+        return {k: s[k] for k in ("labels", "accuracy", "nll", "brier", "ece", "answered_accuracy")} | {
+            "coverage": round(1 - sum(r[2] for r in m.records) / max(len(m.records), 1), 4)}
+
+    async def distill(self, job: Job, ds_id: str, task_name: str, state_columns: list[str] | None = None,
+                      state_mode: str = "auto", limit: int = 200) -> None:
+        """Let the teacher label unlabelled rows and teach the student with them."""
+        try:
+            ds = self.storage.get_dataset(ds_id)
+            if ds is None:
+                raise NotFound(f"dataset {ds_id!r} not found")
+            task = self.get(task_name)
+            provider = self.provider()
+            cols = [c for c in (state_columns or ds["columns"]) if c in ds["columns"]]
+            rows = self.storage.dataset_rows(ds_id, max(1, min(int(limit), 5000)))
+            states = [e["state"] for e in self._examples([{**r, "__x": 1} for r in rows], "__x", cols, state_mode)]
+            sem = asyncio.Semaphore(4)
+            done = failed = 0
+
+            async def one(state: Any) -> None:
+                nonlocal done, failed
+                async with sem:
+                    try:
+                        self.teacher_stats["calls"] += 1
+                        dist, _ = await teacher_answer(provider, state, task.spec)
+                    except Exception as e:
+                        failed += 1
+                        self.teacher_stats["errors"] += 1
+                        self.teacher_stats["last_error"] = str(e)[:300]
+                        return
+                with self.lock(task_name):
+                    task.learn(state, dist, source="teacher")
+                self.storage.add_event(task_name, state, dist, "teacher", task.settings["teacher_weight"])
+                self._touch(task)
+                done += 1
+                self.update_job(job, progress=round((done + failed) / len(states), 4), message=f"teacher labelled {done}/{len(states)}")
+
+            await asyncio.gather(*(one(s) for s in states))
+            if done == 0 and failed:
+                raise LLMError(f"all {failed} teacher calls failed: {self.teacher_stats['last_error']}")
+            self.persist(task)
+            self.update_job(job, status="done", progress=1.0, message="distillation finished",
+                            result={"task": task_name, "labelled": done, "failed": failed})
+        except Exception as e:
+            self.update_job(job, status="error", error=str(e) or type(e).__name__)
+
+    # --------------------------------------------------------------- generation
+    async def design(self, description: str) -> dict:
+        return await design_task(self.provider(), description)
+
+    async def generate(self, job: Job, description: str, design: dict, n: int, name: str = "", train: bool = True) -> None:
+        try:
+            design = normalize_design({**design, "answers": [{"name": k, "description": v} for k, v in design.get("options", {}).items()]}
+                                      if "options" in design and "answers" not in design else design)
+
+            async def progress(done: int, total: int) -> None:
+                self.update_job(job, progress=round(min(done / total, 1.0) * 0.9, 4), message=f"{done}/{total} examples written")
+
+            rows = await generate_examples(self.provider(), design, description, n, progress)
+            ds = self.add_dataset(name or design["name"], "generated", ["state", "answer"], rows,
+                                  {"description": description, "design": design})
+            result: dict[str, Any] = {"dataset": ds["id"], "examples": len(rows)}
+            if train:
+                spec = QuestionSpec.parse(design["name"], {"type": design["type"], "instructions": design["instructions"],
+                                                           "criteria": design["options"]})
+                if spec.name not in self.tasks:
+                    self.create_task(spec)
+                tj = self.new_job("train", f"training {spec.name}")
+                result["train_job"] = tj.id
+                self.spawn(self.train_from_dataset(tj, ds["id"], spec.name, "answer", ["state"], "auto",
+                                                   spec.type, None, spec.instructions))
+            self.update_job(job, status="done", progress=1.0, result=result, message=f"{len(rows)} examples generated")
+        except Exception as e:
+            self.update_job(job, status="error", error=str(e) or type(e).__name__)
+
     # -------------------------------------------------------------------- jobs
+    def spawn(self, coro) -> asyncio.Task:
+        task = asyncio.create_task(coro)
+        self._background.add(task)
+        task.add_done_callback(self._background.discard)
+        return task
+
     def new_job(self, kind: str, message: str = "") -> Job:
         job = Job(id=uuid.uuid4().hex[:12], kind=kind, message=message)
         self.jobs[job.id] = job
@@ -382,66 +706,46 @@ class Desic:
             setattr(job, k, v)
         self._publish_job(job)
 
-    async def train_from_dataset(self, job: Job, ds_id: str, model_name: str, target: str | None = None,
-                                 features: list[str] | None = None, kind: str = "tree", params: dict | None = None,
-                                 holdout: float = 0.2, shuffle: bool = True, passes: int = 1) -> None:
-        try:
-            ds = self.storage.get_dataset(ds_id)
-            if ds is None:
-                raise NotFound(f"dataset {ds_id!r} not found")
-            rows = list(self.storage.iter_dataset_rows(ds_id))
-            if model_name in self.runtimes:
-                rt = self.get(model_name)
-                if target and target != rt.schema.target:
-                    raise ValueError(f"model {model_name!r} predicts {rt.schema.target!r}, not {target!r}")
-                if rt.schema.target not in ds["columns"]:
-                    raise ValueError(f"dataset has no column {rt.schema.target!r}")
-            else:
-                if not target or target not in ds["columns"]:
-                    raise ValueError("choose the target (decision) column")
-                schema = Schema.infer(rows, target, features)
-                rt = self.create_model(model_name, schema, kind, params, description=f"trained from dataset {ds['name']}")
-            if shuffle:
-                random.Random(7).shuffle(rows)
-            holdout = min(max(float(holdout), 0.0), 0.5)
-            n_test = int(len(rows) * holdout)
-            train, test = rows[: len(rows) - n_test], rows[len(rows) - n_test:]
-            passes = max(1, min(int(passes), 10))
-            total = len(train) * passes
-            done = 0
-            chunk = 250
-            self.update_job(job, message=f"training {rt.name} on {len(train)} rows")
-            for p in range(passes):
-                order = train if p == 0 else random.Random(p).sample(train, len(train))
-                for i in range(0, len(order), chunk):
-                    _, _, events = await asyncio.to_thread(self._learn_rows, rt, order[i:i + chunk])
-                    done += len(order[i:i + chunk])
-                    self._publish_learning(rt, events, rt.model.metrics.summary())
-                    self.update_job(job, progress=round(done / max(total, 1), 4))
-            result: dict[str, Any] = {"model": rt.name, "trained_rows": len(train), "passes": passes}
-            if test:
-                result["holdout"] = await asyncio.to_thread(self.evaluate, rt, test)
-            result["prequential"] = _brief(rt.model.metrics.summary())
-            self.persist(rt)
-            self.update_job(job, status="done", progress=1.0, result=result, message="training finished")
-        except Exception as e:  # surfaced to the dashboard through the job
-            self.update_job(job, status="error", error=str(e) or type(e).__name__)
 
-    def evaluate(self, rt: ModelRuntime, rows: list[dict]) -> dict:
-        correct = n = 0
-        confusion: dict[str, dict[str, int]] = {}
-        with rt.lock:
-            for row in rows:
-                y = to_label(row.get(rt.schema.target))
-                if y is None:
-                    continue
-                pred = rt.model.predict(rt.schema.coerce(row))["prediction"]
-                n += 1
-                correct += int(pred == y)
-                r = confusion.setdefault(y, {})
-                r[str(pred)] = r.get(str(pred), 0) + 1
-        return {"rows": n, "accuracy": round(correct / n, 4) if n else None, "confusion": confusion}
+# ------------------------------------------------------------------ helpers
+def _answer_label(pub: dict) -> str:
+    if pub["type"] == CHOICE:
+        return pub["choice"]
+    if pub["type"] == SCORE:
+        return pub["level"]
+    return "true" if pub["answer"] else "false"
+
+
+def _force_answer(task: DecisionTask, pub: dict, label: str) -> dict:
+    pub = dict(pub)
+    if task.spec.type == CHOICE:
+        pub["choice"] = label
+    elif task.spec.type == SCORE:
+        pub["level"] = label
+        pub["score"] = float(task.spec.option_names.index(label))
+    else:
+        pub["answer"] = label == "true"
+        pub["probability"] = 1.0 if label == "true" else 0.0
+    pub["confidence"] = 1.0
+    pub["abstain"] = False
+    return pub
+
+
+def _coerce(v: Any) -> Any:
+    if isinstance(v, str):
+        s = v.strip()
+        n = to_number(s)
+        # keep identifiers like "0042" or phone numbers as text
+        if n is not None and not (len(s) > 1 and s[0] == "0" and s[1].isdigit()):
+            return n
+        return s
+    return v
+
+
+def _preview(state: Any) -> str:
+    text = state_text(state)
+    return text if len(text) <= 240 else text[:237] + "…"
 
 
 def _brief(metrics: dict) -> dict:
-    return {k: metrics[k] for k in ("evaluated", "accuracy", "rolling_accuracy")}
+    return {k: metrics[k] for k in ("labels", "accuracy", "nll", "ece")}

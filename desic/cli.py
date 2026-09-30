@@ -16,9 +16,9 @@ def main(argv: list[str] | None = None) -> None:
     serve.add_argument("--data", default=os.environ.get("DESIC_DATA", "data"), help="data directory (SQLite + models)")
     serve.add_argument("--reload", action="store_true", help="auto-reload on code changes (development)")
 
-    demo = sub.add_parser("demo", help="create a demo model and dataset so the dashboard has something to show")
+    demo = sub.add_parser("demo", help="create demo questions (support tickets + loan applications) to explore")
     demo.add_argument("--data", default=os.environ.get("DESIC_DATA", "data"))
-    demo.add_argument("--rows", type=int, default=2000)
+    demo.add_argument("--rows", type=int, default=600, help="training tickets (loan applications: 3x)")
 
     args = parser.parse_args(argv)
     if args.cmd == "serve":

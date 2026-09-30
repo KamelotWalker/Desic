@@ -1,60 +1,107 @@
-"""A small synthetic loan-approval problem for trying Desic out."""
+"""Demo data: support tickets (text state) and loan applications (JSON state)."""
 
 from __future__ import annotations
 
+import asyncio
 import random
 
-from .core.schema import Schema
+from .core.task import QuestionSpec
 from .service import Desic
 
-CITIES = ["istanbul", "ankara", "izmir", "bursa", "antalya"]
-EMPLOYMENT = ["salaried", "self_employed", "unemployed", "retired"]
+TICKETS = {
+    "billing": [
+        "I was charged twice for my order", "kartımdan iki kez ödeme çekildi, iade istiyorum", "the invoice amount is wrong",
+        "faturamda yanlış tutar var", "please refund my last payment", "aboneliğim onayım olmadan yenilendi",
+        "why did my card get declined at checkout", "ödeme iadesi ne zaman hesabıma geçer", "I need a VAT invoice for March",
+    ],
+    "technical": [
+        "the app crashes as soon as I open it", "uygulama açılmıyor, sürekli hata veriyor", "login page shows error 500",
+        "şifre sıfırlama maili gelmiyor", "sync stopped working after the update", "site çok yavaş ve donuyor",
+        "export to CSV produces an empty file", "bildirimler telefonuma düşmüyor", "API returns 401 with a valid token",
+    ],
+    "sales": [
+        "do you offer discounts for teams", "kurumsal fiyat teklifi almak istiyorum", "what does the pro plan cost",
+        "50 kişilik lisans için fiyat alabilir miyiz", "can we upgrade to enterprise this month", "demo talep ediyorum",
+        "is there an annual billing discount", "eğitim kurumlarına indirim var mı", "we want to buy for 3 more offices",
+    ],
+}
+OPENERS = ["", "Hi, ", "Merhaba, ", "Hello team, ", "Selam, ", "Good morning. "]
+CALM = ["", " Thanks.", " Teşekkürler.", " No rush.", " Müsait olduğunuzda bakarsanız sevinirim.", " Have a nice day."]
+URGENT = [" Acil!", " Acil dönüş lütfen.", " Bu çok acil.", " This is urgent, we are losing sales.", " asap", " Please help today!",
+          " Bugün çözülmezse aboneliği iptal edeceğim.", " URGENT: customers are waiting.", " Hemen dönüş yapın lütfen."]
 
 
-def loan_row(rng: random.Random) -> dict:
+def ticket(rng: random.Random) -> tuple[str, str, bool]:
+    dept = rng.choice(list(TICKETS))
+    urgent = rng.random() < 0.4
+    closer = rng.choice(URGENT if urgent else CALM)
+    text = f"{rng.choice(OPENERS)}{rng.choice(TICKETS[dept])}.{closer}".replace("..", ".")
+    return text, dept, urgent
+
+
+def loan(rng: random.Random) -> tuple[dict, str]:
     income = round(rng.lognormvariate(10.3, 0.5))
+    credit = max(300, min(1900, int(rng.gauss(1350, 250))))
+    employment = rng.choices(["salaried", "self_employed", "unemployed", "retired"], weights=[6, 2, 1, 1])[0]
+    debt = round(min(max(rng.gauss(0.35, 0.15), 0), 1), 2)
     amount = round(rng.uniform(5_000, 400_000), -3)
-    credit = int(rng.gauss(1350, 250))
-    employment = rng.choices(EMPLOYMENT, weights=[6, 2, 1, 1])[0]
-    debt_ratio = round(min(max(rng.gauss(0.35, 0.15), 0), 1), 2)
-    row = {
-        "monthly_income": income,
-        "loan_amount": amount,
-        "credit_score": max(0, min(1900, credit)),
-        "employment": employment,
-        "debt_ratio": debt_ratio,
-        "city": rng.choice(CITIES),
+    state = {
+        "applicant": {"monthly_income": income, "credit_score": credit, "employment": employment, "debt_ratio": debt,
+                      "city": rng.choice(["istanbul", "ankara", "izmir", "bursa", "antalya"])},
+        "loan": {"amount": amount, "purpose": rng.choice(["car", "home", "business", "education", "personal"])},
     }
     burden = amount / max(income * 12, 1)
-    if employment == "unemployed" or row["credit_score"] < 1000 or debt_ratio > 0.65:
-        decision = "reject"
-    elif row["credit_score"] > 1500 and burden < 1.5 and debt_ratio < 0.4:
-        decision = "approve"
+    if employment == "unemployed" or credit < 1000 or debt > 0.65:
+        y = "reject"
+    elif credit > 1500 and burden < 1.5 and debt < 0.4:
+        y = "approve"
     elif burden > 3:
-        decision = "reject"
+        y = "reject"
     else:
-        decision = "review"
-    if rng.random() < 0.04:  # label noise, like real life
-        decision = rng.choice(["approve", "review", "reject"])
-    row["decision"] = decision
-    return row
+        y = "review"
+    if rng.random() < 0.04:
+        y = rng.choice(["approve", "review", "reject"])
+    return state, y
 
 
-def build_demo(data_dir: str, rows: int = 2000) -> str:
+QUESTIONS = {
+    "department": {"type": "choice", "instructions": "Which team should handle this ticket?",
+                   "criteria": {"billing": "payments, invoices, refunds", "technical": "bugs, errors, outages",
+                                "sales": "pricing, plans, purchasing"}},
+    "urgent": {"type": "noul", "instructions": "The customer needs a response today."},
+    "loan_decision": {"type": "choice", "instructions": "What should we do with this loan application?",
+                      "criteria": {"approve": "", "review": "a credit officer should look at it", "reject": ""}},
+}
+
+
+def build_demo(data_dir: str, n: int = 600) -> str:
     rng = random.Random(1)
-    data = [loan_row(rng) for _ in range(rows)]
     desic = Desic(data_dir)
-    columns = list(data[0])
-    ds = desic.add_dataset("loan_applications (demo)", "upload", columns, data)
-    msg = [f"dataset '{ds['name']}' ({ds['id']}) with {len(data)} rows"]
-    if "loan_demo" not in desic.runtimes:
-        schema = Schema.infer(data, "decision")
-        desic.create_model("loan_demo", schema, "tree", description="Demo: approve / review / reject a loan")
-        split = int(len(data) * 0.8)
-        desic.learn("loan_demo", data[:split])
-        for r in data[split:split + 25]:  # leave a few open decisions for the review queue
-            desic.decide("loan_demo", r)
-        desic.persist(desic.get("loan_demo"))
-        msg.append("model 'loan_demo' trained on 80% of it, 25 decisions waiting for feedback")
+    created = []
+    for name, raw in QUESTIONS.items():
+        if name not in desic.tasks:
+            desic.create_task(QuestionSpec.parse(name, raw))
+            created.append(name)
+    if created:
+        tickets = [ticket(rng) for _ in range(n)]
+        desic.learn("department", [{"state": t, "answer": d} for t, d, _ in tickets])
+        desic.learn("urgent", [{"state": t, "answer": u} for t, _, u in tickets])
+        loans = [loan(rng) for _ in range(n * 3)]
+        desic.learn("loan_decision", [{"state": s, "answer": y} for s, y in loans])
+
+        async def open_decisions() -> None:
+            for _ in range(15):
+                t, _, _ = ticket(rng)
+                await desic.decide(t, {"department": {}, "urgent": {}})
+                s, _ = loan(rng)
+                await desic.decide(s, {"loan_decision": {}})
+
+        asyncio.run(open_decisions())
+        desic.persist_all()
+        for name in created:
+            desic.snapshot(name, note="demo baseline")
     desic.storage.close()
-    return "Created " + "; ".join(msg) + ". Now run: desic serve"
+    if not created:
+        return "Demo questions already exist. Run: desic serve"
+    return (f"Created questions {', '.join(created)} (trained on synthetic tickets and loan applications, "
+            "with 30 decisions waiting for feedback). Now run: desic serve")

@@ -1,8 +1,17 @@
-"""HTTP + WebSocket API and dashboard hosting."""
+"""HTTP + WebSocket API and dashboard hosting.
+
+The decision endpoint follows the Jev request shape so Desic can sit where a
+System One model sits:
+
+    POST /v1/decide
+    {"state": "...text or JSON...",
+     "questions": {"department": {"type": "choice", "instructions": "Which team?",
+                                  "criteria": {"billing": "payments, refunds", "technical": "bugs"}},
+                   "urgent": {"type": "noul", "instructions": "The customer needs help today."}}}
+"""
 
 from __future__ import annotations
 
-import asyncio
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -15,9 +24,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import __version__
-from .core.schema import CATEGORICAL, NUMERIC, Feature, Schema
+from .core.task import CHOICE, QuestionSpec, SpecError
 from .datasets import DatasetError, parse_dataset
-from .generation import GenerationError, ProviderConfig, design_schema, generate_rows, make_provider
+from .llm import PROVIDERS, LLMError, ProviderConfig
 from .service import Conflict, Desic, NotFound
 
 STATIC = Path(__file__).parent / "static"
@@ -25,97 +34,109 @@ MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 
 
 # ------------------------------------------------------------------ requests
-class FeatureIn(BaseModel):
-    name: str
-    type: str = NUMERIC
-    values: list[str] = []
-    description: str = ""
-
-
-class CreateModelIn(BaseModel):
-    name: str
-    target: str
-    features: list[FeatureIn]
-    classes: list[str] = []
-    kind: str = "tree"
-    params: dict[str, Any] = {}
-    description: str = ""
-
-
 class DecideIn(BaseModel):
-    features: dict[str, Any]
+    state: Any
+    questions: dict[str, Any] = Field(..., description="question name -> {type, instructions, criteria}; {} reuses a known question")
+    explain: bool = False
     record: bool = True
+    escalate: str = Field("auto", description="auto (per-question teacher mode) | never | always")
+    abstain_threshold: float | None = Field(None, ge=0, le=1)
 
 
 class FeedbackIn(BaseModel):
     decision_id: str
-    label: Any
+    answers: dict[str, Any] = Field(..., description="question name -> correct answer")
+    source: str = "human"
 
 
-class LearnIn(BaseModel):
-    rows: list[dict[str, Any]] = Field(..., max_length=100_000)
+class CreateTaskIn(BaseModel):
+    name: str
+    type: str = CHOICE
+    instructions: str = ""
+    criteria: Any = None
+    settings: dict[str, Any] = {}
+
+
+class PatchTaskIn(BaseModel):
+    instructions: str | None = None
+    descriptions: dict[str, str] | None = None
+    add_options: list[str] | None = None
+    settings: dict[str, Any] | None = None
+
+
+class ExamplesIn(BaseModel):
+    examples: list[dict[str, Any]] = Field(..., max_length=100_000)
 
 
 class RulesIn(BaseModel):
     rules: list[dict[str, Any]]
 
 
-class TrainIn(BaseModel):
-    model: str
-    target: str | None = None
-    features: list[str] | None = None
-    kind: str = "tree"
-    params: dict[str, Any] = {}
-    holdout: float = 0.2
-    shuffle: bool = True
-    passes: int = 1
+class RollbackIn(BaseModel):
+    version: int
 
 
-class ProviderIn(BaseModel):
+class RebuildIn(BaseModel):
+    exclude_sources: list[str] = []
+
+
+class SnapshotIn(BaseModel):
+    note: str = ""
+
+
+class TeacherIn(BaseModel):
     provider: str = "anthropic"
     api_key: str = ""
     model: str = ""
     base_url: str = ""
 
-    def config(self) -> ProviderConfig:
-        return ProviderConfig(self.provider, self.api_key.strip(), self.model.strip(), self.base_url.strip())
+
+class TrainIn(BaseModel):
+    task: str
+    answer_column: str
+    state_columns: list[str] | None = None
+    state_mode: str = "auto"  # auto | text | json
+    type: str = CHOICE
+    levels: list[str] | None = None
+    instructions: str = ""
+    holdout: float = 0.2
 
 
-class DesignIn(ProviderIn):
+class DistillIn(BaseModel):
+    task: str
+    state_columns: list[str] | None = None
+    state_mode: str = "auto"
+    limit: int = Field(200, ge=1, le=5000)
+
+
+class DesignIn(BaseModel):
     description: str = Field(..., min_length=5, max_length=4000)
-    n_features: int = Field(6, ge=2, le=20)
 
 
-class GenerateIn(ProviderIn):
+class GenerateIn(BaseModel):
     description: str = Field(..., min_length=5, max_length=4000)
     design: dict[str, Any]
-    n_rows: int = Field(200, ge=10, le=5000)
+    n: int = Field(200, ge=5, le=5000)
     name: str = ""
-    train_model: str = ""  # when set, train (or create) this model on the result
-    kind: str = "tree"
+    train: bool = True
 
 
 # ----------------------------------------------------------------------- app
-def create_app(data_dir: str | None = None) -> FastAPI:
+def create_app(data_dir: str | None = None, teacher: ProviderConfig | None = None) -> FastAPI:
     data_dir = data_dir or os.environ.get("DESIC_DATA", "data")
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        app.state.desic = Desic(data_dir)
-        app.state.tasks = set()
+        app.state.desic = Desic(data_dir, teacher=teacher)
         yield
         app.state.desic.persist_all()
         app.state.desic.storage.close()
 
-    app = FastAPI(title="Desic", version=__version__, lifespan=lifespan)
+    app = FastAPI(title="Desic", version=__version__, lifespan=lifespan,
+                  description="Self-learning typed-decision engine (choice / score / noul) with calibrated probabilities.")
 
     def svc() -> Desic:
         return app.state.desic
-
-    def spawn(coro) -> None:
-        task = asyncio.create_task(coro)
-        app.state.tasks.add(task)
-        task.add_done_callback(app.state.tasks.discard)
 
     @app.exception_handler(NotFound)
     async def _nf(_, e: NotFound):
@@ -125,81 +146,139 @@ def create_app(data_dir: str | None = None) -> FastAPI:
     async def _cf(_, e: Conflict):
         return JSONResponse({"detail": str(e)}, status_code=409)
 
+    @app.exception_handler(SpecError)
+    async def _se(_, e: SpecError):
+        return JSONResponse({"detail": str(e)}, status_code=422)
+
     @app.exception_handler(ValueError)
     async def _ve(_, e: ValueError):
         return JSONResponse({"detail": str(e)}, status_code=400)
 
-    @app.exception_handler(GenerationError)
-    async def _ge(_, e: GenerationError):
+    @app.exception_handler(LLMError)
+    async def _le(_, e: LLMError):
         return JSONResponse({"detail": str(e)}, status_code=502)
 
-    # ---------------------------------------------------------------- basics
-    @app.get("/api/health")
+    # ------------------------------------------------------------- decisions
+    @app.get("/v1/health")
     async def health():
-        return {"status": "ok", "version": __version__, "models": len(svc().runtimes)}
+        return {"status": "ok", "version": __version__, "questions": len(svc().tasks),
+                "teacher": svc().teacher_cfg is not None}
 
-    # ---------------------------------------------------------------- models
-    @app.get("/api/models")
-    async def list_models():
-        return svc().list_models()
+    @app.post("/v1/decide")
+    async def decide(body: DecideIn):
+        return await svc().decide(body.state, body.questions, body.record, body.explain, body.escalate, body.abstain_threshold)
 
-    @app.post("/api/models", status_code=201)
-    async def create_model(body: CreateModelIn):
-        for f in body.features:
-            if f.type not in (NUMERIC, CATEGORICAL):
-                raise ValueError(f"feature {f.name!r}: type must be 'numeric' or 'categorical'")
-        schema = Schema([Feature(f.name, f.type, list(f.values), f.description) for f in body.features],
-                        body.target, list(body.classes))
-        rt = svc().create_model(body.name, schema, body.kind, body.params, body.description)
-        return svc().model_detail(rt.name)
+    @app.post("/v1/feedback")
+    async def feedback(body: FeedbackIn):
+        return svc().feedback(body.decision_id, body.answers, body.source)
 
-    @app.get("/api/models/{name}")
-    async def get_model(name: str):
-        return svc().model_detail(name)
+    @app.get("/v1/decisions/{decision_id}")
+    async def get_decision(decision_id: str):
+        d = svc().storage.get_decision(decision_id)
+        if d is None:
+            raise NotFound(f"decision {decision_id!r} not found")
+        return d
 
-    @app.delete("/api/models/{name}", status_code=204)
-    async def delete_model(name: str):
-        svc().delete_model(name)
+    # ------------------------------------------------------------- questions
+    @app.get("/v1/questions")
+    async def list_questions():
+        return svc().list_tasks()
 
-    @app.post("/api/models/{name}/reset")
-    async def reset_model(name: str):
-        svc().reset_model(name)
-        return svc().model_detail(name)
+    @app.post("/v1/questions", status_code=201)
+    async def create_question(body: CreateTaskIn):
+        spec = QuestionSpec.parse(body.name, {"type": body.type, "instructions": body.instructions, "criteria": body.criteria})
+        svc().create_task(spec)
+        if body.settings:
+            svc().update_task(spec.name, {"settings": body.settings})
+        return svc().task_detail(spec.name)
 
-    @app.get("/api/models/{name}/tree")
-    async def get_tree(name: str, member: int | None = None):
-        return svc().tree(name, member)
+    @app.get("/v1/questions/{name}")
+    async def get_question(name: str):
+        return svc().task_detail(name)
 
-    @app.get("/api/models/{name}/learned-rules")
-    async def learned_rules(name: str, limit: int = 100):
-        return svc().learned_rules(name, limit)
+    @app.patch("/v1/questions/{name}")
+    async def patch_question(name: str, body: PatchTaskIn):
+        return svc().update_task(name, body.model_dump(exclude_none=True))
 
-    @app.put("/api/models/{name}/rules")
+    @app.delete("/v1/questions/{name}", status_code=204)
+    async def delete_question(name: str):
+        svc().delete_task(name)
+
+    @app.post("/v1/questions/{name}/reset")
+    async def reset_question(name: str):
+        svc().reset_task(name)
+        return svc().task_detail(name)
+
+    @app.post("/v1/questions/{name}/learn")
+    async def learn(name: str, body: ExamplesIn):
+        return await anyio.to_thread.run_sync(svc().learn, name, body.examples)
+
+    @app.get("/v1/questions/{name}/decisions")
+    async def question_decisions(name: str, limit: int = 50, pending: bool = False, uncertain_first: bool = False):
+        return svc().answers(name, min(limit, 500), pending, uncertain_first)
+
+    @app.put("/v1/questions/{name}/rules")
     async def put_rules(name: str, body: RulesIn):
         return svc().set_rules(name, body.rules)
 
-    @app.post("/api/models/{name}/decide")
-    async def decide(name: str, body: DecideIn):
-        return svc().decide(name, body.features, body.record)
+    @app.get("/v1/questions/{name}/feedback")
+    async def question_feedback(name: str, limit: int = 100, offset: int = 0):
+        svc().get(name)
+        return svc().storage.list_events(name, min(limit, 500), offset)
 
-    @app.post("/api/models/{name}/feedback")
-    async def feedback(name: str, body: FeedbackIn):
-        return svc().feedback(name, body.decision_id, body.label)
+    @app.post("/v1/feedback/{event_id}/retract")
+    async def retract(event_id: int):
+        return svc().retract(event_id, True)
 
-    @app.post("/api/models/{name}/learn")
-    async def learn(name: str, body: LearnIn):
-        return await asyncio.to_thread(svc().learn, name, body.rows)
+    @app.post("/v1/feedback/{event_id}/restore")
+    async def restore(event_id: int):
+        return svc().retract(event_id, False)
 
-    @app.get("/api/models/{name}/decisions")
-    async def decisions(name: str, limit: int = 50, pending: bool = False, uncertain_first: bool = False):
-        return svc().decisions(name, min(limit, 500), pending, uncertain_first)
+    @app.get("/v1/questions/{name}/snapshots")
+    async def snapshots(name: str):
+        svc().get(name)
+        return svc().storage.list_snapshots(name)
+
+    @app.post("/v1/questions/{name}/snapshots", status_code=201)
+    async def snapshot(name: str, body: SnapshotIn):
+        return svc().snapshot(name, body.note)
+
+    @app.post("/v1/questions/{name}/rollback")
+    async def rollback(name: str, body: RollbackIn):
+        return svc().rollback(name, body.version)
+
+    @app.post("/v1/questions/{name}/rebuild", status_code=202)
+    async def rebuild(name: str, body: RebuildIn):
+        svc().get(name)
+        job = svc().new_job("rebuild", f"rebuilding {name} from the feedback log")
+        svc().spawn(svc().rebuild(job, name, body.exclude_sources))
+        return job.to_dict()
+
+    # --------------------------------------------------------------- teacher
+    @app.get("/v1/teacher")
+    async def get_teacher():
+        return svc().teacher_public()
+
+    @app.put("/v1/teacher")
+    async def put_teacher(body: TeacherIn):
+        if body.provider not in PROVIDERS:
+            raise ValueError(f"provider must be one of {', '.join(PROVIDERS)}")
+        return svc().set_teacher(ProviderConfig(body.provider, body.api_key.strip(), body.model.strip(), body.base_url.strip()))
+
+    @app.delete("/v1/teacher")
+    async def delete_teacher():
+        return svc().set_teacher(None)
+
+    @app.post("/v1/teacher/test")
+    async def test_teacher():
+        return await svc().test_teacher()
 
     # -------------------------------------------------------------- datasets
-    @app.get("/api/datasets")
+    @app.get("/v1/datasets")
     async def list_datasets():
         return svc().storage.list_datasets()
 
-    @app.post("/api/datasets", status_code=201)
+    @app.post("/v1/datasets", status_code=201)
     async def upload_dataset(file: UploadFile = File(...), name: str = Form("")):
         content = await file.read(MAX_UPLOAD_BYTES + 1)
         if len(content) > MAX_UPLOAD_BYTES:
@@ -211,71 +290,53 @@ def create_app(data_dir: str | None = None) -> FastAPI:
         ds = svc().add_dataset(name or file.filename or "dataset", "upload", columns, rows)
         return svc().dataset_profile(ds["id"])
 
-    @app.get("/api/datasets/{ds_id}")
+    @app.get("/v1/datasets/{ds_id}")
     async def get_dataset(ds_id: str, preview: int = 20):
         return svc().dataset_profile(ds_id, min(preview, 500))
 
-    @app.delete("/api/datasets/{ds_id}", status_code=204)
+    @app.delete("/v1/datasets/{ds_id}", status_code=204)
     async def delete_dataset(ds_id: str):
         if svc().storage.get_dataset(ds_id) is None:
             raise NotFound(f"dataset {ds_id!r} not found")
         svc().storage.delete_dataset(ds_id)
 
-    @app.post("/api/datasets/{ds_id}/train", status_code=202)
+    @app.post("/v1/datasets/{ds_id}/train", status_code=202)
     async def train(ds_id: str, body: TrainIn):
         if svc().storage.get_dataset(ds_id) is None:
             raise NotFound(f"dataset {ds_id!r} not found")
-        job = svc().new_job("train", f"training {body.model}")
-        spawn(svc().train_from_dataset(job, ds_id, body.model, body.target, body.features, body.kind,
-                                       body.params, body.holdout, body.shuffle, body.passes))
+        job = svc().new_job("train", f"training {body.task}")
+        svc().spawn(svc().train_from_dataset(job, ds_id, body.task, body.answer_column, body.state_columns,
+                                             body.state_mode, body.type, body.levels, body.instructions, body.holdout))
+        return job.to_dict()
+
+    @app.post("/v1/datasets/{ds_id}/distill", status_code=202)
+    async def distill(ds_id: str, body: DistillIn):
+        if svc().storage.get_dataset(ds_id) is None:
+            raise NotFound(f"dataset {ds_id!r} not found")
+        svc().get(body.task)
+        svc().provider()  # fail fast without a teacher
+        job = svc().new_job("distill", f"teacher labelling for {body.task}")
+        svc().spawn(svc().distill(job, ds_id, body.task, body.state_columns, body.state_mode, body.limit))
         return job.to_dict()
 
     # ------------------------------------------------------------ generation
-    @app.post("/api/generate/design")
+    @app.post("/v1/generate/design")
     async def generate_design(body: DesignIn):
-        provider = make_provider(body.config())
-        return await design_schema(provider, body.description, body.n_features)
+        return await svc().design(body.description)
 
-    @app.post("/api/generate/dataset", status_code=202)
-    async def generate_dataset(body: GenerateIn):
-        provider = make_provider(body.config())  # validate before starting the job
-        desic = svc()
-        job = desic.new_job("generate", f"generating {body.n_rows} rows")
-
-        async def run():
-            try:
-                from .generation import normalize_design
-
-                design = normalize_design(body.design)
-
-                async def progress(done: int, total: int) -> None:
-                    desic.update_job(job, progress=round(min(done / total, 1.0) * 0.95, 4),
-                                     message=f"{done}/{total} rows generated")
-
-                rows = await generate_rows(provider, design, body.description, body.n_rows, progress)
-                columns = [f["name"] for f in design["features"]] + [design["target"]]
-                ds = desic.add_dataset(body.name or design["name"], "generated", columns, rows,
-                                       {"description": body.description, "design": design})
-                result: dict[str, Any] = {"dataset": ds["id"], "rows": len(rows)}
-                if body.train_model:
-                    train_job = desic.new_job("train", f"training {body.train_model}")
-                    result["train_job"] = train_job.id
-                    spawn(desic.train_from_dataset(train_job, ds["id"], body.train_model, design["target"],
-                                                   None, body.kind))
-                desic.update_job(job, status="done", progress=1.0, result=result,
-                                 message=f"{len(rows)} rows generated")
-            except Exception as e:
-                desic.update_job(job, status="error", error=str(e) or type(e).__name__)
-
-        spawn(run())
+    @app.post("/v1/generate/examples", status_code=202)
+    async def generate(body: GenerateIn):
+        svc().provider()
+        job = svc().new_job("generate", f"writing {body.n} examples")
+        svc().spawn(svc().generate(job, body.description, body.design, body.n, body.name, body.train))
         return job.to_dict()
 
     # ------------------------------------------------------------------ jobs
-    @app.get("/api/jobs")
+    @app.get("/v1/jobs")
     async def list_jobs():
         return sorted((j.to_dict() for j in svc().jobs.values()), key=lambda j: -j["created_at"])[:50]
 
-    @app.get("/api/jobs/{job_id}")
+    @app.get("/v1/jobs/{job_id}")
     async def get_job(job_id: str):
         job = svc().jobs.get(job_id)
         if job is None:
@@ -288,7 +349,6 @@ def create_app(data_dir: str | None = None) -> FastAPI:
         await websocket.accept()
         bus = svc().bus
         q = bus.subscribe()
-
         try:
             async with anyio.create_task_group() as tg:
 

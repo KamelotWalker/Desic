@@ -89,7 +89,7 @@ def main(argv: list[str] | None = None) -> None:
 
 
 def add_arguments(ap: argparse.ArgumentParser) -> None:
-    ap.add_argument("--scenarios", default="all", help=f"comma separated: {', '.join(SCENARIOS)} (default: all)")
+    ap.add_argument("--scenarios", default="all", help="comma separated: " + ", ".join(SCENARIOS).replace("%", "%%") + " (default: all)")
     ap.add_argument("--seeds", type=int, default=3, help="seeds 0..N-1 (stream order, noise, attacked classes)")
     ap.add_argument("--learner", default="desic", choices=sorted(LEARNERS))
     ap.add_argument("--workers", type=int, default=os.cpu_count() or 1)

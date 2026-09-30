@@ -84,3 +84,11 @@ def test_scenarios_are_deterministic(tickets):
     a.pop("seconds"), b.pop("seconds")
     a["headline"].pop("undo_seconds"), b["headline"].pop("undo_seconds")
     assert a == b
+
+
+def test_cli_help_lists_the_scenarios(capsys):
+    from desic.cli import main
+
+    with pytest.raises(SystemExit):
+        main(["eval", "--help"])
+    assert "noise-1%" in capsys.readouterr().out

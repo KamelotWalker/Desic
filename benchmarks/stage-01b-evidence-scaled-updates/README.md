@@ -16,12 +16,16 @@
 
 `urgent` sorusu, demo destek talepleriyle eğitilmiş; mesaj "Merhaba, erken rezervasyon yaptırmak istiyorum":
 
-| | Etiketten önce | Stage 00 | Stage 01b |
-|---|---|---|---|
-| Öğretmen %55 "true" dedikten sonra, aynı mesaj | 0,37 | **0,94** | 0,35 |
-| Aynı etiketten sonra ilgisiz "Rezervasyonumu iptal etmek istiyorum" | 0,68 | 0,81 | 0,68 |
-| Öğretmen %90 "true" dedikten sonra | 0,37 | — | 0,70 |
-| İnsan "true" düzeltmesinden sonra | 0,37 | 0,97 | 0,97 |
+Her hücre: etiketten önce → sonra, P(acil).
+
+| | Stage 00 | Stage 01b |
+|---|---|---|
+| Öğretmen %55 "true" dedi, aynı mesaj | 0,37 → **0,94** | 0,44 → 0,35 |
+| Aynı etiket, ilgisiz "Rezervasyonumu iptal etmek istiyorum" | 0,68 → 0,81 | 0,56 → 0,56 |
+| Öğretmen %90 "true" dedi, aynı mesaj | 0,37 → 0,96 | 0,44 → 0,70 |
+| İnsan "true" dedi, aynı mesaj | 0,37 → 0,97 | 0,44 → 0,97 |
+
+("Önce" değerleri iki sürümde farklı, çünkü tanıdıklık kuralı değişti ve bu kural tahminin eşit dağılıma ne kadar çekileceğini etkiliyor.)
 
 ## Banking77 (regresyon kontrolü)
 

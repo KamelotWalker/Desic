@@ -14,6 +14,7 @@ Her geliştirme aşamasının ölçümleri burada **ayrı bir klasörde** ve de�
 | 06 | [`stage-06-diagnosis`](stage-06-diagnosis/) | Parça parça teşhis: kalıcı model, patch'ler, kapı. Tekrar çalışma deneyleri ve seçilen ayarın 3 tohumluk ölçümü | Ortak sebep kalıcı modele tekrar çalışma; "model makul buluyorsa tekrar çalış" ile yanlış tekrarlama %21–24 → %11, karışık %89,0; drift ve öğretmenli senaryo değişmedi |
 | 07 | [`stage-07-decision-contract`](stage-07-decision-contract/) | Faz 1: maliyetler, maliyet matrisi, risk bütçesi; karar kaydı | Bütçe tutuluyor (%2/%5/%10 → %1,4/%4,0/%8,5 hata, kapsam en iyi olasının %86–96'sı); seyrek geri bildirimde aşırı temkinli (öğretmenli senaryoda %93 soruyor, ama test doğruluğu %74,5) |
 | 08 | [`stage-08-expected-risk-budget`](stage-08-expected-risk-budget/) | "Beklenen" bütçe modu: kalibre güven + etiketlerle düzeltme (prediction-powered) | Bol geri bildirimde en iyi olası kapsamın %98–100'ü, hata ortalamada bütçede; öğretmenli senaryoda patch'li öğrenci %95 doğru cevaplıyor, öğretmene %71 (garantili %93), test %74,4 (bütçesiz %70,8) |
+| 09 | [`stage-09-supersede-rejected`](stage-09-supersede-rejected/) | Drift için çürütülmüş patch'leri oydan çıkarmak (tek tohum) | **Reddedildi:** drift birebir aynı; sınırlayan kalıcı modelin hızı ve deneme süresi gecikmesi |
 
 ## Her aşama klasöründe
 

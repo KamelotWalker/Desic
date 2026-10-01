@@ -16,6 +16,7 @@ Her geliştirme aşamasının ölçümleri burada **ayrı bir klasörde** ve de�
 | 08 | [`stage-08-expected-risk-budget`](stage-08-expected-risk-budget/) | "Beklenen" bütçe modu: kalibre güven + etiketlerle düzeltme (prediction-powered) | Bol geri bildirimde en iyi olası kapsamın %98–100'ü, hata ortalamada bütçede; öğretmenli senaryoda patch'li öğrenci %95 doğru cevaplıyor, öğretmene %71 (garantili %93), test %74,4 (bütçesiz %70,8) |
 | 09 | [`stage-09-supersede-rejected`](stage-09-supersede-rejected/) | Drift için çürütülmüş patch'leri oydan çıkarmak (tek tohum) | **Reddedildi:** drift birebir aynı; sınırlayan kalıcı modelin hızı ve deneme süresi gecikmesi |
 | 10 | [`stage-10-blast-radius`](stage-10-blast-radius/) | B1: patlamanın diğer sınıflara hasarı, pekiştirme sonrası, hiç saldırı görmemiş ikize karşı; sönümleme denemesi | Patch: 0,5 → 1,0 → 0,1 puan (temel: 3,8 → 0,1 → 0); sönümleme hasarı sıfırlıyor ama drift %65,8 → %50, karışık −3 puan: **reddedildi** |
+| 11 | [`stage-11-policy-and-served-risk`](stage-11-policy-and-served-risk/) | P1: politika/model ayrımı, aday politika yeniden oynatma. S1: kullanıcıya verilen cevabın hatası, kaynağa göre | Garantili %8 bütçe, öğrencinin hatasını düşürürken kullanıcının gördüğü hatayı %19'a çıkarıyor (bütçesiz temel %14,9): yönlendirme bedava değil |
 
 ## Her aşama klasöründe
 

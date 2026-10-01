@@ -248,7 +248,8 @@ class PatchedTask:
                  replay: int = 1, checkpoint_every: int = 1000,
                  keep_checkpoints: int = 4, trust_sim: float = 0.5, gate_by_answer: bool = True,
                  gate_sources: tuple[str, ...] = ("human", "dataset", "teacher"), gate_prior: float = 0.5,
-                 retire_below: float = 0.0, rehearse_min_support: float = 0.0, seed: int = 0, **store: Any) -> None:
+                 retire_below: float = 0.0, rehearse_min_support: float = 0.0, rehearse_if_base_agrees: float = 0.0,
+                 seed: int = 0, **store: Any) -> None:
         self.base = base
         # Probation is ``probation_share`` of the labels seen, between ``min_probation`` and
         # ``probation``: a small question still trains its experts early (undoing an old label
@@ -266,6 +267,9 @@ class PatchedTask:
         self.gate_sources = tuple(gate_sources)  # whose labels teach the gate which forecaster to trust
         self.retire_below = retire_below  # entries trusted less than this are no longer rehearsed
         self.rehearse_min_support = rehearse_min_support  # rehearse only entries later labels have confirmed this much
+        # rehearse only entries the base itself gives at least this probability (a lie or an outdated
+        # meaning contradicts the rest of what the base knows, so it is not drilled in again)
+        self.rehearse_if_base_agrees = rehearse_if_base_agrees
         self.calibrator = TemperatureCalibrator()
         self.calib_log: deque = deque(maxlen=self.calibrator.samples.maxlen)  # (entry id, raw, label)
         # What users see is the patched task: it takes over the served-quality metrics, the
@@ -474,6 +478,9 @@ class PatchedTask:
                 confirmed = p.support >= getattr(self, "rehearse_min_support", 0.0)
                 if (p.consolidated and pid != exclude and confirmed and tr >= getattr(self, "retire_below", 0.0)
                         and self.rng.random() < tr):
+                    agree = getattr(self, "rehearse_if_base_agrees", 0.0)
+                    if agree and self.base.answer(p.state)["raw"].get(p.label, 0.0) < agree:
+                        break  # this rehearsal slot is skipped, not handed to another entry
                     self.base.learn(p.state, p.target, source=p.source, weight=p.weight, replay=True)
                     break
 

@@ -1,0 +1,6 @@
+noreplay drift 0 {'adaptation_half_life': 3500, 'moved_final': 0.6725, 'others_min': 0.7275}
+noreplay noise-5% 0 {'accuracy': 0.875, 'ece': 0.1336, 'cum_log_loss': 1.0122, 'poison_repeated': 0.0901}
+noreplay teacher 0 {'teacher_rate_last': 0.394, 'answered_accuracy_last': 0.8812, 'test_accuracy': 0.7341, 'test_ece': 0.0576}
+noreplay sorted 0 {'accuracy': 0.7925, 'ece': 0.2661, 'cum_log_loss': 1.7248, 'forgetting_index': 0.1007}
+noreplay shuffled 0 {'accuracy': 0.8812, 'ece': 0.0116, 'cum_log_loss': 0.9188}
+noreplay burst 0 {'victim_after': 0.825, 'others_drop': 0.0004}

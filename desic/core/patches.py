@@ -248,7 +248,7 @@ class PatchedTask:
                  replay: int = 1, checkpoint_every: int = 1000,
                  keep_checkpoints: int = 4, trust_sim: float = 0.5, gate_by_answer: bool = True,
                  gate_sources: tuple[str, ...] = ("human", "dataset", "teacher"), gate_prior: float = 0.5,
-                 retire_below: float = 0.0, seed: int = 0, **store: Any) -> None:
+                 retire_below: float = 0.0, rehearse_min_support: float = 0.0, seed: int = 0, **store: Any) -> None:
         self.base = base
         # Probation is ``probation_share`` of the labels seen, between ``min_probation`` and
         # ``probation``: a small question still trains its experts early (undoing an old label
@@ -265,6 +265,7 @@ class PatchedTask:
         self.gate = Gate(prior=gate_prior)
         self.gate_sources = tuple(gate_sources)  # whose labels teach the gate which forecaster to trust
         self.retire_below = retire_below  # entries trusted less than this are no longer rehearsed
+        self.rehearse_min_support = rehearse_min_support  # rehearse only entries later labels have confirmed this much
         self.calibrator = TemperatureCalibrator()
         self.calib_log: deque = deque(maxlen=self.calibrator.samples.maxlen)  # (entry id, raw, label)
         # What users see is the patched task: it takes over the served-quality metrics, the
@@ -470,7 +471,9 @@ class PatchedTask:
                 pid = next(iter(ids)) if len(ids) == 1 else list(ids)[self.rng.randrange(len(ids))]
                 p = self.store.entries[pid]
                 tr = self.store.trust(p, self.t)
-                if p.consolidated and pid != exclude and tr >= getattr(self, "retire_below", 0.0) and self.rng.random() < tr:
+                confirmed = p.support >= getattr(self, "rehearse_min_support", 0.0)
+                if (p.consolidated and pid != exclude and confirmed and tr >= getattr(self, "retire_below", 0.0)
+                        and self.rng.random() < tr):
                     self.base.learn(p.state, p.target, source=p.source, weight=p.weight, replay=True)
                     break
 

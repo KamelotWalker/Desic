@@ -16,8 +16,11 @@ replay the whole log.
   (edited nearest neighbours), so a wrong or outdated label fades out locally.
 * **Gate.** How much the patches outweigh the base is learned, not fixed: a
   Hedge mixture (base vs patches) per context cell; the cell is how close the
-  nearest patch is and whether patches and base agree. A temperature on top
-  keeps the combined answer calibrated.
+  nearest patch is, whether patches and base agree and which answer the patches
+  propose (an answer not seen yet starts from the shared cell). Keying it by
+  answer keeps a burst of wrong labels from teaching the gate to trust patches
+  for every other answer too. A temperature on top keeps the combined answer
+  calibrated.
 * **Probation.** An entry reaches the base once ``probation`` further
   events. Until then retracting it is exact and O(1): the base never saw it.
 * **Consolidation.** When an entry is consolidated the base learns it, together
@@ -186,7 +189,8 @@ class Gate:
         return f"{b}{'=' if agree else '≠'}"
 
     def weights(self, cell: str) -> tuple[float, float]:
-        lb, lp = self.logw.get(cell, [0.0, 0.0])
+        # a per-answer cell ("3≠:refund") not seen yet starts from its shared cell ("3≠")
+        lb, lp = self.logw.get(cell) or self.logw.get(cell.split(":", 1)[0], [0.0, 0.0])
         m = max(lb, lp)
         eb, ep = math.exp(lb - m), math.exp(lp - m)
         return eb / (eb + ep), ep / (eb + ep)
@@ -196,6 +200,11 @@ class Gate:
         self._apply(cell, loss_b, loss_p, weight)
 
     def _apply(self, cell: str, loss_b: float, loss_p: float, weight: float) -> None:
+        if ":" in cell:  # the shared cell keeps learning too: it is the prior for answers not seen yet
+            self._apply_one(cell.split(":", 1)[0], loss_b, loss_p, weight)
+        self._apply_one(cell, loss_b, loss_p, weight)
+
+    def _apply_one(self, cell: str, loss_b: float, loss_p: float, weight: float) -> None:
         wb, wp = self.weights(cell)
         nb, np_ = wb * math.exp(-weight * loss_b), wp * math.exp(-weight * loss_p)
         s = nb + np_
@@ -216,13 +225,15 @@ class PatchedTask:
     """A :class:`DecisionTask` behind a reversible patch layer (same answer / public / learn interface)."""
 
     def __init__(self, base: DecisionTask, probation: int = 500, replay: int = 1, checkpoint_every: int = 1000,
-                 keep_checkpoints: int = 4, trust_sim: float = 0.5, seed: int = 0, **store: Any) -> None:
+                 keep_checkpoints: int = 4, trust_sim: float = 0.5, gate_by_answer: bool = True, seed: int = 0,
+                 **store: Any) -> None:
         self.base = base
         self.probation = probation
         self.replay = replay
         self.checkpoint_every = checkpoint_every
         self.keep_checkpoints = keep_checkpoints
         self.trust_sim = trust_sim  # a later label counts for/against a patch only when at least this similar
+        self.gate_by_answer = gate_by_answer  # one gate per answer the patches propose (contains a burst to its label)
         self.store = PatchStore(**store)
         self.gate = Gate()
         self.calibrator = TemperatureCalibrator()
@@ -262,7 +273,10 @@ class PatchedTask:
         f = {"a": a, "pb": pb, "pq": pq, "near": near, "cell": None, "strength": 0.0, "raw": pb, "wp": 0.0}
         if pq is not None:
             f["strength"] = near[0][0]
-            f["cell"] = self.gate.cell(f["strength"], confidence_of(pb)[0] == confidence_of(pq)[0])
+            top = confidence_of(pq)[0]
+            f["cell"] = self.gate.cell(f["strength"], confidence_of(pb)[0] == top)
+            if getattr(self, "gate_by_answer", False):
+                f["cell"] += ":" + top
             wb, wp = self.gate.weights(f["cell"])
             f["raw"], f["wp"] = {o: wb * pb.get(o, 0.0) + wp * pq.get(o, 0.0) for o in opts}, wp
         return f

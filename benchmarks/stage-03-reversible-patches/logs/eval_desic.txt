@@ -1,0 +1,81 @@
+  shuffled seed 0: 101.2s
+  shuffled seed 1: 101.9s
+  shuffled seed 2: 103.1s
+  sorted seed 0: 133.7s
+  sorted seed 1: 134.7s
+  sorted seed 2: 132.9s
+  noise-1% seed 0: 82.9s
+  noise-1% seed 1: 81.1s
+  noise-1% seed 2: 83.0s
+  noise-5% seed 0: 84.2s
+  noise-5% seed 1: 84.0s
+  noise-5% seed 2: 82.4s
+  burst seed 0: 136.8s
+  burst seed 1: 134.8s
+  burst seed 2: 133.5s
+  drift seed 0: 116.9s
+  drift seed 1: 114.3s
+  drift seed 2: 112.8s
+  teacher seed 0: 28.4s
+  teacher seed 1: 27.9s
+  teacher seed 2: 25.3s
+
+shuffled
+  accuracy                     0.8875 ± 0.0023
+  nll                          0.4226 ± 0.0051
+  ece                          0.0154 ± 0.0066
+  risk@80%                     0.0326 ± 0.0002
+  aurc                         0.0193 ± 0.0006
+  coverage                     0.8822 ± 0.017
+  answered_accuracy            0.9427 ± 0.0063
+  cum_log_loss                 0.8777 ± 0.0081
+sorted
+  accuracy                     0.137 ± 0.015
+  nll                          3.517 ± 0.12
+  ece                          0.5006 ± 0.033
+  forgetting_index             0.6314 ± 0.037
+  cum_log_loss                 0.362 ± 0.0045
+noise-1%
+  accuracy                     0.8854 ± 0.0021
+  nll                          0.4298 ± 0.0035
+  ece                          0.0215 ± 0.011
+  risk@80%                     0.0329 ± 0.0007
+  poison_repeated              0.0643 ± 0.04
+  cum_log_loss                 0.8908 ± 0.01
+noise-5%
+  accuracy                     0.8793 ± 0.0031
+  nll                          0.5036 ± 0.0098
+  ece                          0.0848 ± 0.019
+  risk@80%                     0.0388 ± 0.0031
+  poison_repeated              0.0686 ± 0.016
+  cum_log_loss                 0.9681 ± 0.0091
+burst
+  victim_before                0.7667 ± 0.063
+  victim_after                 0.0083 ± 0.014
+  victim_as_attack_label       0.9333 ± 0.072
+  others_drop                  0.0377 ± 0.009
+  recovery_half_life           2833 ± 6.8e+02
+  victim_final                 0.75 ± 0.1
+  victim_after_undo            0.7667 ± 0.063
+  accuracy_change_after_undo   0 ± 0
+  undo_events_replayed         5001 ± 0
+  undo_seconds                 29.63 ± 0.27
+drift
+  moved_before                 0.8367 ± 0.04
+  moved_at_drift               0 ± 0
+  adaptation_half_life         3000 ± 2.5e+02
+  moved_final                  0.6475 ± 0.041
+  others_before                0.8325 ± 0.028
+  others_min                   0.7733 ± 0.068
+  others_final                 0.8833 ± 0.026
+  post_drift_cum_log_loss      0.8527 ± 0.03
+teacher
+  teacher_rate_first           0.948 ± 0.029
+  teacher_rate_last            0.4627 ± 0.049
+  answered_accuracy_last       0.9241 ± 0.036
+  teacher_calls                3594 ± 3.4e+02
+  human_labels                 256 ± 12
+  test_accuracy                0.7364 ± 0.0093
+  test_ece                     0.1151 ± 0.034
+  test_coverage                0.5426 ± 0.039
+  test_answered_accuracy       0.923 ± 0.021

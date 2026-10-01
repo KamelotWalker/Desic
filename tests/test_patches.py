@@ -94,3 +94,16 @@ def test_survives_pickling_and_reports_patch_weight():
     assert a["patch"] is not None and "patch" in a["weights"]
     assert t2.public(a)["choice"] in DEPT["criteria"]
     assert t2.summary()["patches"]["consolidated"] == 45
+
+
+def test_gate_per_answer_falls_back_to_the_shared_cell():
+    from desic.core.patches import Gate
+
+    g = Gate()
+    for i in range(20):  # patches keep beating the base when they propose "sales"
+        g.update(i, "3≠:sales", 2.0, 0.1, 1.0)
+    assert g.weights("3≠:sales")[1] > 0.9
+    shared = g.weights("3≠")[1]
+    assert g.weights("3≠:billing")[1] == shared  # an answer not seen yet starts from the shared cell
+    g.forget(set(range(20)))
+    assert g.weights("3≠:sales") == (0.5, 0.5)

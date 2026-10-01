@@ -248,7 +248,7 @@ class PatchedTask:
                  replay: int = 1, checkpoint_every: int = 1000,
                  keep_checkpoints: int = 4, trust_sim: float = 0.5, gate_by_answer: bool = True,
                  gate_sources: tuple[str, ...] = ("human", "dataset", "teacher"), gate_prior: float = 0.5,
-                 retire_below: float = 0.0, rehearse_min_support: float = 0.0, rehearse_if_base_agrees: float = 0.0,
+                 retire_below: float = 0.0, rehearse_min_support: float = 0.0, rehearse_if_base_agrees: float = 0.5,
                  seed: int = 0, **store: Any) -> None:
         self.base = base
         # Probation is ``probation_share`` of the labels seen, between ``min_probation`` and

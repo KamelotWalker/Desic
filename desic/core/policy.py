@@ -68,12 +68,18 @@ class DecisionPolicy:
 
     def decide(self, probs: Dist, metrics: Any = None, abstain_threshold: float | None = None) -> dict:
         d = contract.decide(probs, self.settings(), metrics, abstain_threshold)
-        if (d["abstain"] and getattr(self, "escalation_aware", False) and abstain_threshold is None
+        if (getattr(self, "escalation_aware", False) and abstain_threshold is None
                 and not self.cost_matrix and self.cost_abstain is None):  # explicit costs already price escalation
             acc = teacher_accuracy(metrics)
-            if acc is not None and probs.get(d["answer"], 0.0) >= acc:
-                d["abstain"] = False
-                d["rule"] += "+escalation_aware"
+            if acc is not None:
+                p = probs.get(d["answer"], 0.0)
+                if d["abstain"] and p >= acc:  # as sure as the teacher: escalating would not help the user
+                    d["abstain"] = False
+                    d["rule"] += "+escalation_aware"
+                elif not d["abstain"] and d["rule"] == "threshold" and p < acc:
+                    # only a hand-set threshold, no budget: the teacher is the better bet below its accuracy
+                    d["abstain"] = True
+                    d["rule"] += "+escalation_aware"
                 d["teacher_accuracy"] = round(acc, 4)
         d["policy_version"] = self.version
         return d

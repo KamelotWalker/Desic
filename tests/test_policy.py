@@ -69,6 +69,8 @@ def test_escalation_aware_answers_when_as_sure_as_the_teacher():
     d = pol.decide(probs, m)
     assert not d["abstain"] and d["rule"].endswith("+escalation_aware") and d["teacher_accuracy"] == 0.8
     assert pol.decide({"a": 0.7, "b": 0.3}, m)["abstain"]  # less sure than the teacher: still escalates
+    low = DecisionPolicy(abstain_threshold=0.6, escalation_aware=True)
+    assert low.decide({"a": 0.7, "b": 0.3}, m)["abstain"]  # a lax hand-set threshold is raised to the teacher's accuracy
     assert DecisionPolicy(abstain_threshold=0.9).decide(probs, m)["abstain"]  # off by default
     priced = DecisionPolicy(cost_wrong=10, cost_abstain=1, escalation_aware=True)
     assert priced.decide(probs, m)["abstain"]  # explicit costs already price the escalation

@@ -186,17 +186,16 @@ Doğruluk tek başına yetmiyor: model akış boyunca nasıl öğreniyor, hatal�
 | 10 sınıfın anlamı değişiyor (drift) | Yarı toparlanma 3.000 etiket; drift dedektörü tetiklenmiyor |
 | Öğretmenli soğuk başlangıç | Öğretmene bağımlılık %95 → %46 |
 
-**Geri alınabilir patch katmanı** (`desic/core/patches.py`, [aşama 03](benchmarks/stage-03-reversible-patches/)): her etiket önce yerel, geri alınabilir bir patch olur ve kalıcı modele ancak 500 olaylık deneme süresinden sonra geçer. Aynı akışlarda temel modele göre:
+**Geri alınabilir patch katmanı** (`desic/core/patches.py`, [aşama 03](benchmarks/stage-03-reversible-patches/), [aşama 04](benchmarks/stage-04-service-integration/)): her etiket önce yerel, geri alınabilir bir patch olur ve kalıcı modele bir deneme süresinden (etiketlerin %10'u, 20–500) sonra geçer. Tüm sorular bu katmandan geçer; dashboard'daki **Retract** ve **Undo last N** anında uygulanır. Aynı akışlarda temel modele göre:
 
 | | Temel model | Patch katmanı |
 |---|---|---|
-| Karışık akış | %88,75 | %88,86 |
+| Karışık akış | %88,75 | %89,31 |
 | Sıralı akış (forgetting index) | %13,7 (0,63) | **%80,2 (0,10)** |
-| 30 hatalı etiket: diğer sınıflara hasar | 3,8 puan | **0,5 puan** |
-| Bu etiketleri geri alma | 29,6 sn, 5.001 olay yeniden oynatılır | **0,1 sn, 0 olay** |
-| Drift yarı ömrü | 3.000 etiket | 3.417 etiket (kötü) |
-
-Patch katmanı şimdilik çekirdekte ve değerlendirme düzeneğinde; API ve dashboard hâlâ temel modeli kullanıyor.
+| 30 hatalı etiket: diğer sınıflara hasar | 3,8 puan | **0,35 puan** |
+| Bu etiketleri geri alma | 29,6 sn, 5.001 olay yeniden oynatılır | **0,12 sn, 0 olay** |
+| Drift yarı ömrü | 3.000 etiket | 3.500 etiket (kötü) |
+| Aynı mesajda yanlış etiketi tekrarlama | %7 | ~%23 (kötü) |
 
 Tüm aşamaların ölçümleri, ham loglar ve JSON sonuçları: [`benchmarks/`](benchmarks/).
 
@@ -213,7 +212,7 @@ Referans: yayınlanmış sonuçlarda (Casanueva ve ark., 2020) tam veriyle ince 
 
 ```bash
 pip install -e '.[dev]'
-pytest                      # 70 test: çekirdek, API, öğretmen/üretim, nöral öğrenci (torch yoksa atlanır), değerlendirme
+pytest                      # 75 test: çekirdek, API, öğretmen/üretim, nöral öğrenci (torch yoksa atlanır), değerlendirme
 desic eval --seeds 1        # akış senaryoları (Banking77)
 desic serve --reload
 ```

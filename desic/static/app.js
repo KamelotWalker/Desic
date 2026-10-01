@@ -377,7 +377,7 @@ function answerCard(name, a, decisionId, st) {
     h('div', { class: 'row' },
       h('span', { class: `badge ${a.source === 'teacher' ? 'warn' : a.source === 'rule' ? 'bad' : 'accent'}` },
         a.source === 'student' ? 'student (System 1)' : a.source === 'teacher' ? 'teacher (System 2)' : `rule: ${(a.rule && a.rule.name) || ''}`),
-      a.abstain ? h('span', { class: 'badge warn', title: 'confidence below the abstain threshold' }, 'abstains') : null));
+      a.abstain ? h('span', { class: 'badge warn', title: a.decision ? `rule: ${a.decision.rule}, threshold ${a.decision.threshold}` : 'confidence below the abstain threshold' }, 'abstains') : null));
   let main;
   const probs = Object.entries(a.probabilities || {});
   if (a.type === 'noul') {
@@ -392,6 +392,8 @@ function answerCard(name, a, decisionId, st) {
   return h('div', { class: 'panel' }, head, h('div', { class: 'result', style: { borderTop: 'none', paddingTop: '8px', marginTop: 0 } },
     main,
     h('div', { class: 'small muted' }, `confidence ${pct(a.confidence)}`,
+      a.decision && a.decision.threshold != null ? ` · answers above ${pct(a.decision.threshold)} (${a.decision.rule.replace(/_/g, ' ')})` : '',
+      a.decision && a.decision.expected_cost != null ? ` · expected cost ${dec(a.decision.expected_cost, 2)}` : '',
       a.student ? ` · the student alone was ${pct(a.student.confidence)} sure` : '',
       a.teacher_error ? ` · teacher failed: ${a.teacher_error}` : ''),
     a.rationale ? h('p', { class: 'note' }, h('strong', {}, 'Teacher: '), a.rationale) : null,
@@ -759,13 +761,18 @@ function tabSettings(q) {
   const mode = h('select', {}, [['on_abstain', 'when the student abstains'], ['always', 'on every decision (costly)'], ['off', 'never']]
     .map(([v, l]) => h('option', { value: v, selected: v === q.settings.teacher_mode }, l)));
   const tw = h('input', { type: 'number', min: 0, max: 1, step: 0.05, value: q.settings.teacher_weight });
+  const num0 = (v, attrs) => h('input', { type: 'number', min: 0, step: 'any', value: v == null ? '' : v, placeholder: 'not used', ...attrs });
+  const budget = num0(q.settings.risk_budget == null ? null : +(q.settings.risk_budget * 100).toFixed(2), { max: 99, step: 0.5 });
+  const cw = num0(q.settings.cost_wrong), ca = num0(q.settings.cost_abstain);
+  const opt = v => (v === '' ? null : +v);
   const add = q.type === 'choice' ? h('input', { placeholder: 'new answer name' }) : null;
   const save = h('button', { class: 'primary' }, 'Save settings');
   save.onclick = () => guard(save, async () => {
     await api('PATCH', `/v1/questions/${enc(q.name)}`, {
       instructions: instr.value, descriptions: Object.fromEntries(descs.map(([k, i]) => [k, i.value])),
       add_options: add && add.value.trim() ? [add.value.trim()] : undefined,
-      settings: { abstain_threshold: +thr.value, teacher_mode: mode.value, teacher_weight: +tw.value },
+      settings: { abstain_threshold: +thr.value, teacher_mode: mode.value, teacher_weight: +tw.value,
+        risk_budget: budget.value === '' ? null : +budget.value / 100, cost_wrong: opt(cw.value), cost_abstain: opt(ca.value) },
     });
     toast('Saved', 'good'); await refreshQuestion(); renderTab();
   });
@@ -776,9 +783,18 @@ function tabSettings(q) {
       add ? h('label', { class: 'field' }, h('span', {}, 'Add an answer'), add) : null),
     h('div', { class: 'panel' }, h('h2', {}, 'Behaviour'),
       h('label', { class: 'field' }, h('span', {}, 'Abstain below confidence '), h('div', { class: 'row' }, thr, thrOut)),
-      h('p', { class: 'small muted' }, 'Use the risk–coverage chart above to pick this: a higher threshold means fewer but more accurate automatic answers.'),
+      h('p', { class: 'small muted' }, 'Use the risk–coverage chart above to pick this: a higher threshold means fewer but more accurate automatic answers. ',
+        'Used only while no risk budget or costs are set below — those replace it (the threshold they compute can be lower or higher).'),
       h('label', { class: 'field' }, h('span', {}, 'Ask the teacher'), mode),
       h('label', { class: 'field' }, h('span', {}, 'Teacher label weight (human = 1)'), tw),
+      h('h3', {}, 'Decision contract'),
+      h('p', { class: 'small muted' }, 'Instead of picking a threshold by hand, say what mistakes cost. When more than one rule is set, the strictest wins; unfamiliar inputs are always escalated.'),
+      h('label', { class: 'field' }, h('span', {}, 'Risk budget: at most this % of answered decisions may be wrong'), budget),
+      h('p', { class: 'small muted' }, 'The student answers as much as it can while the error rate of its recent labelled answers stays within the budget (with a 90% safety margin). Needs 30 labelled decisions to start.'),
+      h('div', { class: 'row' },
+        h('label', { class: 'field' }, h('span', {}, 'Cost of a wrong answer'), cw),
+        h('label', { class: 'field' }, h('span', {}, 'Cost of escalating'), ca)),
+      h('p', { class: 'small muted' }, 'Answer only when (1 − confidence) × cost of a wrong answer ≤ cost of escalating. Example: 10 and 1 → answer above 90% confidence. Asymmetric costs per answer: set cost_matrix via the API.'),
       save));
 }
 

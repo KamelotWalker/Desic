@@ -96,13 +96,15 @@ class PatchStore:
     """Patch entries with an inverted index for nearest-neighbour lookups."""
 
     def __init__(self, capacity: int = 20000, k: int = 10, min_sim: float = 0.35, df_cap: int = 1000,
-                 trust_prior: float = 1.0, trust_halflife: float | None = None) -> None:
+                 trust_prior: float = 1.0, trust_halflife: float | None = None, supersede_below: float = 0.0) -> None:
         self.capacity = capacity
         self.k = k
         self.min_sim = min_sim
         self.df_cap = df_cap
         self.trust_prior = trust_prior
         self.trust_halflife = trust_halflife  # in labels; None = support and contradiction never fade
+        # an entry whose trust fell below this has been superseded by newer labels around it: it no longer votes
+        self.supersede_below = supersede_below
         self.entries: dict[int, Patch] = {}
         self.index: dict[str, set[int]] = {}
         self.by_label: dict[str, dict[int, None]] = {}  # insertion-ordered: oldest first
@@ -176,8 +178,12 @@ class PatchStore:
 
     def vote(self, near: list[tuple[float, Patch]], options: list[str], now: int = 0) -> Dist | None:
         acc = {o: 0.0 for o in options}
+        cut = getattr(self, "supersede_below", 0.0)
         for s, p in near:
-            w = s * s * p.weight * self.trust(p, now)
+            tr = self.trust(p, now)
+            if tr < cut:
+                continue
+            w = s * s * p.weight * tr
             for o, q in p.target.items():
                 if o in acc:
                     acc[o] += w * q

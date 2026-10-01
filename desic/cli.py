@@ -4,9 +4,15 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 
 
 def main(argv: list[str] | None = None) -> None:
+    # Legacy Windows code pages (e.g. cp1254) cannot encode "→" and friends; degrade instead of crashing.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
+
     parser = argparse.ArgumentParser(prog="desic", description="Self-learning, explainable decision engine")
     sub = parser.add_subparsers(dest="cmd", required=True)
 

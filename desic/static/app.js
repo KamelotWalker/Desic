@@ -770,11 +770,12 @@ function tabSettings(q) {
   const bmode = h('select', {}, [['guaranteed', 'guaranteed — labelled answers must prove it (safe; escalates a lot while labels are few)'],
     ['expected', 'expected — trust the calibrated confidences, corrected by the labels (answers more; holds on average)']]
     .map(([v, l]) => h('option', { value: v, selected: v === (q.settings.risk_budget_mode || 'guaranteed') }, l)));
+  const aware = h('input', { type: 'checkbox', checked: !!q.settings.escalation_aware });
   const opt = v => (v === '' ? null : +v);
   const add = q.type === 'choice' ? h('input', { placeholder: 'new answer name' }) : null;
   const formSettings = () => ({ abstain_threshold: +thr.value, teacher_mode: mode.value, teacher_weight: +tw.value,
     risk_budget: budget.value === '' ? null : +budget.value / 100, risk_budget_mode: bmode.value,
-    cost_wrong: opt(cw.value), cost_abstain: opt(ca.value) });
+    cost_wrong: opt(cw.value), cost_abstain: opt(ca.value), escalation_aware: aware.checked });
   const save = h('button', { class: 'primary' }, 'Save settings');
   save.onclick = () => guard(save, async () => {
     await api('PATCH', `/v1/questions/${enc(q.name)}`, {
@@ -815,6 +816,8 @@ function tabSettings(q) {
         h('label', { class: 'field' }, h('span', {}, 'Cost of a wrong answer'), cw),
         h('label', { class: 'field' }, h('span', {}, 'Cost of escalating'), ca)),
       h('p', { class: 'small muted' }, 'Answer only when (1 − confidence) × cost of a wrong answer ≤ cost of escalating. Example: 10 and 1 → answer above 90% confidence. Asymmetric costs per answer: set cost_matrix via the API.'),
+      h('label', { class: 'check' }, aware, 'Route by measured accuracy: answer when the student has been at least as accurate as the teacher at this confidence, ask the teacher when it has been less'),
+      h('p', { class: 'small muted' }, 'Escalating is not free — the teacher can be wrong too. Lowers the error users see and puts teacher labels where the student is weakest, at the price of 15–30% more teacher calls. Needs 20 teacher answers with feedback.'),
       h('p', { class: 'small muted' }, `Decision policy v${(q.policy || {}).version || 1} — changing it never changes what the student has learned.`),
       h('div', { class: 'row' }, save, preview), previewOut));
 }

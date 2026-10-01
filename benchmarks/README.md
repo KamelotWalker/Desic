@@ -17,6 +17,7 @@ Her geliştirme aşamasının ölçümleri burada **ayrı bir klasörde** ve de�
 | 09 | [`stage-09-supersede-rejected`](stage-09-supersede-rejected/) | Drift için çürütülmüş patch'leri oydan çıkarmak (tek tohum) | **Reddedildi:** drift birebir aynı; sınırlayan kalıcı modelin hızı ve deneme süresi gecikmesi |
 | 10 | [`stage-10-blast-radius`](stage-10-blast-radius/) | B1: patlamanın diğer sınıflara hasarı, pekiştirme sonrası, hiç saldırı görmemiş ikize karşı; sönümleme denemesi | Patch: 0,5 → 1,0 → 0,1 puan (temel: 3,8 → 0,1 → 0); sönümleme hasarı sıfırlıyor ama drift %65,8 → %50, karışık −3 puan: **reddedildi** |
 | 11 | [`stage-11-policy-and-served-risk`](stage-11-policy-and-served-risk/) | P1: politika/model ayrımı, aday politika yeniden oynatma. S1: kullanıcıya verilen cevabın hatası, kaynağa göre | Garantili %8 bütçe, öğrencinin hatasını düşürürken kullanıcının gördüğü hatayı %19'a çıkarıyor (bütçesiz temel %14,9): yönlendirme bedava değil |
+| 12 | [`stage-12-escalation-aware`](stage-12-escalation-aware/) | S2: öğretmenin ölçülen doğruluğuna göre yönlendirme (3 deneme) | **Ölçüt sağlanmadı:** kullanıcı hatası en iyi %15,0 (hedef < %14,9). Patch'li %18,3 → %15,7; test doğruluğu +2,5 puan; %15–30 daha fazla öğretmen çağrısı. İsteğe bağlı ayar |
 
 ## Her aşama klasöründe
 

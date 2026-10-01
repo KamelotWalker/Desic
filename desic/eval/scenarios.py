@@ -44,12 +44,20 @@ def _shuffled(train: list[Item], seed: int) -> list[Item]:
     return stream
 
 
-def _step(task: Any, pq: Prequential | None, x: str, given: str, true: str | None = None, ref: str | None = None) -> dict:
+ANNOTATORS = 6  # burst and drift streams are labelled round-robin by this many annotators
+
+
+def _who(i: int) -> str:
+    return f"a{i % ANNOTATORS}"
+
+
+def _step(task: Any, pq: Prequential | None, x: str, given: str, true: str | None = None, ref: str | None = None,
+          annotator: str | None = None) -> dict:
     """Serve an answer, score it against the true label, then learn the given label."""
     a = task.answer(x)
     if pq is not None:
         pq.add(a["probabilities"], given if true is None else true)
-    task.learn(x, given, source="dataset", served=a["probabilities"], served_raw=a["raw"], ref=ref)
+    task.learn(x, given, source="dataset", served=a["probabilities"], served_raw=a["raw"], ref=ref, annotator=annotator)
     return a
 
 
@@ -173,11 +181,11 @@ def burst(make: Make, train: list[Item], test: list[Item], classes: list[str], s
 
     task, pq = make(classes), Prequential()
     t0 = time.time()
-    for x, y in stream[:split]:
-        _step(task, pq, x, y)
+    for i, (x, y) in enumerate(stream[:split]):
+        _step(task, pq, x, y, annotator=_who(i))
     before, before_a = evaluate(task, test), evaluate(task, a_test)
     for i, (x, g) in enumerate(attack):
-        _step(task, pq, x, g, true=a_cls, ref=f"burst-{i}")
+        _step(task, pq, x, g, true=a_cls, ref=f"burst-{i}", annotator="a0")  # one compromised annotator
     others_test = [it for it in test if it[1] != a_cls]
     after, after_a = evaluate(task, test), evaluate(task, a_test)
     others_before = round((before["accuracy"] * len(test) - before_a["accuracy"] * len(a_test)) / len(others_test), 4)
@@ -195,8 +203,8 @@ def burst(make: Make, train: list[Item], test: list[Item], classes: list[str], s
     else:
         u0 = time.time()
         clean = make(classes)
-        for x, y in stream[:split]:
-            clean.learn(x, y, source="dataset")
+        for i, (x, y) in enumerate(stream[:split]):
+            clean.learn(x, y, source="dataset", annotator=_who(i))
         undo_seconds = round(time.time() - u0, 4)
         undo_events = split
     undo, undo_a = evaluate(clean, test), evaluate(clean, a_test)
@@ -212,9 +220,9 @@ def burst(make: Make, train: list[Item], test: list[Item], classes: list[str], s
     rec = [(0, after_a["accuracy"])]
     last = max(harm_at) if harm_at else 0
     for i, (x, y) in enumerate(rest, 1):
-        _step(task, pq, x, y)
+        _step(task, pq, x, y, annotator=_who(i))
         if i <= last:
-            _step(clean, None, x, y)
+            _step(clean, None, x, y, annotator=_who(i))
             if i in harm_at:
                 harm[i] = round(others_acc(clean) - others_acc(task), 4)
         if i % probe_every == 0:
@@ -255,8 +263,8 @@ def drift(make: Make, train: list[Item], test: list[Item], classes: list[str], s
 
     task, pq = make(classes), Prequential()
     t0 = time.time()
-    for x, y in stream[:split]:
-        _step(task, pq, x, y)
+    for i, (x, y) in enumerate(stream[:split]):
+        _step(task, pq, x, y, annotator=_who(i))
     pre_aff, pre_other = evaluate(task, aff_old)["accuracy"], evaluate(task, other)["accuracy"]
     start = evaluate(task, aff_new)["accuracy"]
     curve, other_curve = [(0, start)], [(0, pre_other)]
@@ -264,7 +272,7 @@ def drift(make: Make, train: list[Item], test: list[Item], classes: list[str], s
     events_before = len(task.events)
     post = stream[split:]
     for i, (x, y) in enumerate(post, 1):
-        _step(task, post_pq, x, mapping.get(y, y))
+        _step(task, post_pq, x, mapping.get(y, y), annotator=_who(i))  # every annotator adopts the new meaning
         if i % probe_every == 0 or i == len(post):
             curve.append((i, evaluate(task, aff_new)["accuracy"]))
             other_curve.append((i, evaluate(task, other)["accuracy"]))

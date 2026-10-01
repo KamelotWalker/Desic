@@ -299,7 +299,8 @@ class DecisionTask:
     # ------------------------------------------------------------------ learn
     def learn(self, state: Any, target: str | Dist, source: str = "human", weight: float | None = None,
               served: Dist | None = None, served_raw: Dist | None = None, abstained: bool = False,
-              ref: str | None = None, replay: bool = False, served_action: tuple[str, str] | None = None) -> list[dict]:
+              ref: str | None = None, replay: bool = False, served_action: tuple[str, str] | None = None,
+              annotator: str | None = None) -> list[dict]:
         """Learn one example. ``served``/``served_raw`` are the (calibrated / raw)
         probabilities the user actually saw; when omitted the task predicts
         first (test-then-train) so the metrics stay prequential.

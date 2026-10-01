@@ -172,3 +172,26 @@ def test_retracted_labels_leave_the_risk_controller_too():
     assert [r[:2] for r in m.records] == [r[:2] for r in c.records]
     assert _budget_tau(m, 0.05) == _budget_tau(c, 0.05) != tau_dirty
     assert dirty.labels == clean.labels
+
+
+def test_source_trust_flags_one_contradicting_annotator_not_a_shared_shift():
+    """K1: one annotator contradicting everyone loses weight; all annotators shifting together do not."""
+    data = rows(400)
+    t = task(probation=1000, min_probation=1000, source_trust=True, source_halflife=200)
+    for i, (s, y) in enumerate(data):
+        t.learn(s, y, source="dataset", annotator=f"a{i % 4}")
+    assert all(abs(t.sources.weight(f"a{k}", t.t) - 1) < 0.2 for k in range(4))
+    bad = [(s, "sales") for s, y in rows(200, seed=7) if y == "billing"][:25]
+    for i, (s, y) in enumerate(bad):
+        t.learn(s, y, source="dataset", annotator="a0", ref=f"bad-{i}")
+    w_bad, w_ok = t.sources.weight("a0", t.t), t.sources.weight("a1", t.t)
+    assert w_bad < 0.6 < w_ok
+    t.retract(f"bad-{i}" for i in range(25))  # undone exactly: back to trusted
+    assert abs(t.sources.weight("a0", t.t) - 1) < 0.2
+
+    shift = task(probation=1000, min_probation=1000, source_trust=True, source_halflife=200)
+    for i, (s, y) in enumerate(data):
+        shift.learn(s, y, source="dataset", annotator=f"a{i % 4}")
+    for i, (s, y) in enumerate(rows(200, seed=8)):  # everyone now calls billing "sales"
+        shift.learn(s, "sales" if y == "billing" else y, source="dataset", annotator=f"a{i % 4}")
+    assert min(shift.sources.weight(f"a{k}", shift.t) for k in range(4)) > 0.7

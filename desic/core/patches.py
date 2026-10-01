@@ -73,6 +73,8 @@ class Patch:
     t_ref: int = 0        # time support/contra were last decayed to
     touched: list = field(default_factory=list)  # (neighbour id, d_support, d_contra, time) this entry caused
     metric: tuple | None = None  # its contribution to the served-quality metrics (undone on retract)
+    annotator: str | None = None  # who gave the label (K1: source trust)
+    source_touched: list = field(default_factory=list)  # (annotator, d_agree, d_disagree, time) it caused
 
     def _fade(self, now: int, halflife: float | None) -> float:
         return 0.5 ** ((now - self.t_ref) / halflife) if halflife and now > self.t_ref else 1.0
@@ -91,6 +93,75 @@ class Patch:
 
 def _vec(x: Features) -> dict[str, float]:
     return {f: v for f, v in x.sparse.items() if f != "bias" and not f.startswith("n:")}
+
+
+class SourceTrust:
+    """How well each annotator agrees with *other* annotators on similar inputs (K1).
+
+    A careless or malicious annotator starts contradicting everyone else at once; under
+    concept drift every annotator contradicts the old labels alike. So reliability is
+    taken *relative to the median annotator*: a burst from one source loses weight, a
+    shift everyone makes together does not. Counts fade with a half-life (in labels) so a
+    compromised account is caught from its recent behaviour.
+    """
+
+    def __init__(self, halflife: float = 300.0, prior: float = 10.0, power: float = 1.0) -> None:
+        self.halflife = halflife
+        self.prior = prior  # pseudo-observations at the median: a new annotator is trusted like the median
+        self.power = power
+        self.stats: dict[str, list[float]] = {}  # annotator -> [agree, disagree, t_ref]
+        self._cache: tuple[int, float] | None = None
+
+    def _fade(self, a: str, now: int) -> list[float]:
+        st = self.stats.setdefault(a, [0.0, 0.0, float(now)])
+        if now > st[2]:
+            f = 0.5 ** ((now - st[2]) / self.halflife)
+            st[0] *= f
+            st[1] *= f
+            st[2] = float(now)
+        return st
+
+    def add(self, a: str, agree: float, disagree: float, now: int) -> None:
+        st = self._fade(a, now)
+        st[0] += agree
+        st[1] += disagree
+        self._cache = None
+
+    def remove(self, a: str, agree: float, disagree: float, at: int, now: int) -> None:
+        st = self._fade(a, now)
+        f = 0.5 ** ((now - at) / self.halflife)
+        st[0] = max(0.0, st[0] - agree * f)
+        st[1] = max(0.0, st[1] - disagree * f)
+        self._cache = None
+
+    def _rate(self, a: str, now: int) -> float | None:
+        """Share of this annotator's cross-annotator comparisons that disagreed (faded)."""
+        st = self._fade(a, now)
+        n = st[0] + st[1]
+        return st[1] / n if n > 0 else None
+
+    def median(self, now: int) -> float:
+        if self._cache is not None and self._cache[0] == now:
+            return self._cache[1]
+        rates = sorted(r for r in (self._rate(a, now) for a in list(self.stats)) if r is not None)
+        med = rates[len(rates) // 2] if rates else 0.0
+        self._cache = (now, med)
+        return med
+
+    def weight(self, a: str | None, now: int) -> float:
+        """Multiplier in (0, 1]: (median disagreement rate / this annotator's) ** power, so an
+        annotator who disagrees with the others three times as often as the median counts a
+        third; an unknown annotator, or one at or below the median, counts fully."""
+        if a is None or a not in self.stats:
+            return 1.0
+        med = max(self.median(now), 0.02)  # floor: near-perfect agreement must not make every slip fatal
+        st = self._fade(a, now)
+        dis = (st[1] + self.prior * med) / (st[0] + st[1] + self.prior)
+        return min(med / dis, 1.0) ** self.power if dis > 0 else 1.0
+
+    def report(self, now: int) -> dict:
+        return {a: {"agreement": None if self._rate(a, now) is None else round(1 - self._rate(a, now), 3),
+                    "weight": round(self.weight(a, now), 3)} for a in sorted(self.stats)}
 
 
 class PatchStore:
@@ -177,7 +248,8 @@ class PatchStore:
     def trust(self, p: Patch, now: int) -> float:
         return p.trust(self.trust_prior, now, getattr(self, "trust_halflife", None))
 
-    def vote(self, near: list[tuple[float, Patch]], options: list[str], now: int = 0) -> Dist | None:
+    def vote(self, near: list[tuple[float, Patch]], options: list[str], now: int = 0,
+             source_weight: Any = None) -> Dist | None:
         acc = {o: 0.0 for o in options}
         cut = getattr(self, "supersede_below", 0.0)
         for s, p in near:
@@ -185,6 +257,8 @@ class PatchStore:
             if tr < cut:
                 continue
             w = s * s * p.weight * tr
+            if source_weight is not None:
+                w *= source_weight(getattr(p, "annotator", None))
             for o, q in p.target.items():
                 if o in acc:
                     acc[o] += w * q
@@ -256,7 +330,8 @@ class PatchedTask:
                  keep_checkpoints: int = 4, trust_sim: float = 0.5, gate_by_answer: bool = True,
                  gate_sources: tuple[str, ...] = ("human", "dataset", "teacher"), gate_prior: float = 0.5,
                  retire_below: float = 0.0, rehearse_min_support: float = 0.0, rehearse_if_base_agrees: float = 0.5,
-                 consolidate_damping: float = 0.0, seed: int = 0, **store: Any) -> None:
+                 consolidate_damping: float = 0.0, source_trust: bool = False, source_halflife: float = 300.0,
+                 source_power: float = 1.0, seed: int = 0, **store: Any) -> None:
         self.base = base
         # Probation is ``probation_share`` of the labels seen, between ``min_probation`` and
         # ``probation``: a small question still trains its experts early (undoing an old label
@@ -280,6 +355,8 @@ class PatchedTask:
         # an entry the base finds less plausible than this is consolidated with proportionally less
         # weight, so a burst of wrong labels spreads less when it leaves probation (0 = off)
         self.consolidate_damping = consolidate_damping
+        # K1: weigh labels by how well their annotator agrees with the other annotators
+        self.sources = SourceTrust(source_halflife, power=source_power) if source_trust else None
         self.calibrator = TemperatureCalibrator()
         self.calib_log: deque = deque(maxlen=self.calibrator.samples.maxlen)  # (entry id, raw, label)
         # What users see is the patched task: it takes over the served-quality metrics, the
@@ -337,6 +414,9 @@ class PatchedTask:
         state["_last"] = None
         return state
 
+    def _source_weight(self, annotator: str | None) -> float:
+        return self.sources.weight(annotator, self.t) if getattr(self, "sources", None) is not None else 1.0
+
     @property
     def probation(self) -> int:
         """How many of the latest labels are still on probation (reversible in O(1))."""
@@ -352,7 +432,7 @@ class PatchedTask:
         opts = a["options"]
         pb = self.base.calibrator.apply(a["raw"])  # calibrated, before the familiarity shrink
         near = self.store.query(_vec(a["feats"]), a["key"])
-        pq = self.store.vote(near, opts, self.t) if near else None
+        pq = self.store.vote(near, opts, self.t, self._source_weight if getattr(self, "sources", None) else None) if near else None
         f = {"a": a, "pb": pb, "pq": pq, "near": near, "cell": None, "strength": 0.0, "raw": pb, "wp": 0.0}
         if pq is not None:
             f["strength"] = near[0][0]
@@ -408,9 +488,11 @@ class PatchedTask:
     # ----------------------------------------------------------------- learn
     def learn(self, state: Any, target: str | Dist, source: str = "human", weight: float | None = None,
               served: Dist | None = None, served_raw: Dist | None = None, abstained: bool = False,
-              ref: str | None = None, served_action: tuple[str, str] | None = None) -> list[dict]:
+              ref: str | None = None, served_action: tuple[str, str] | None = None,
+              annotator: str | None = None) -> list[dict]:
         """``served_action`` = (who answered: student/teacher/rule, the answer the user got),
-        so the risk of what was actually served is tracked too (and undone with the label)."""
+        so the risk of what was actually served is tracked too (and undone with the label).
+        ``annotator`` = who gave the label (a user id), for source trust."""
         spec = self.base.spec
         if not isinstance(target, dict):
             label = spec.label_of(target)
@@ -432,6 +514,7 @@ class PatchedTask:
         vec = _vec(f["a"]["feats"])
         p = Patch(self.next_id, state, vec, math.sqrt(sum(v * v for v in vec.values())) or 1.0, key, dist,
                   confidence_of(dist)[0], weight, source, ref, self.t)
+        p.annotator = annotator
         self.next_id += 1
         # prequential: which forecaster would have been right, and was the combined answer calibrated?
         if f["pq"] is not None and source in getattr(self, "gate_sources", (source,)):
@@ -455,6 +538,12 @@ class PatchedTask:
             ds, dc = (d, 0.0) if nb.label == p.label else (0.0, d)
             nb.add_evidence(ds, dc, self.t, getattr(self.store, "trust_halflife", None))
             p.touched.append((nb.id, ds, dc, self.t))
+            other = getattr(nb, "annotator", None)
+            if getattr(self, "sources", None) is not None and annotator is not None and other is not None and other != annotator:
+                agree, dis = (s * s, 0.0) if nb.label == p.label else (0.0, s * s)
+                for who in (annotator, other):  # agreement is mutual
+                    self.sources.add(who, agree, dis, self.t)
+                    p.source_touched.append((who, agree, dis, self.t))
         self.store.add(p)
         self.pending.append(p)
         if ref is not None:
@@ -470,6 +559,8 @@ class PatchedTask:
 
     def _consolidate(self, p: Patch) -> list[dict]:
         weight, damp = p.weight, getattr(self, "consolidate_damping", 0.0)
+        if getattr(self, "sources", None) is not None:
+            weight *= self._source_weight(getattr(p, "annotator", None))
         if damp:
             plausible = self.base.answer(p.state)["raw"].get(p.label, 0.0)
             if plausible < damp:
@@ -498,7 +589,7 @@ class PatchedTask:
                 tr = self.store.trust(p, self.t)
                 confirmed = p.support >= getattr(self, "rehearse_min_support", 0.0)
                 if (p.consolidated and pid != exclude and confirmed and tr >= getattr(self, "retire_below", 0.0)
-                        and self.rng.random() < tr):
+                        and self.rng.random() < tr * self._source_weight(getattr(p, "annotator", None))):
                     agree = getattr(self, "rehearse_if_base_agrees", 0.0)
                     if agree and self.base.answer(p.state)["raw"].get(p.label, 0.0) < agree:
                         break  # this rehearsal slot is skipped, not handed to another entry
@@ -525,6 +616,9 @@ class PatchedTask:
             src = self.store.entries[i].source
             if self.labels_by_source.get(src):
                 self.labels_by_source[src] -= 1
+            if getattr(self, "sources", None) is not None:
+                for who, ag, di, at in getattr(self.store.entries[i], "source_touched", ()):
+                    self.sources.remove(who, ag, di, at, self.t)
             for nid, ds, dc, at in self.store.entries[i].touched:
                 nb = self.store.entries.get(nid)
                 if nb is not None:  # remove exactly what is left of that evidence today
@@ -573,6 +667,8 @@ class PatchedTask:
     def summary(self) -> dict:
         out = self.base.summary()
         out.update(labels=self.labels, labels_by_source=self.labels_by_source, version=self.version)
+        if getattr(self, "sources", None) is not None:
+            out["annotators"] = self.sources.report(self.t)
         out["patches"] = {"probation": self.probation, "entries": len(self.store), "on_probation": len(self.pending), "consolidated": len(self.log),
                           "checkpoints": [c[0] for c in self.checkpoints], "temperature": self.calibrator.t,
                           "gate": {c: round(self.gate.weights(c)[1], 3) for c in sorted(self.gate.logw)}}

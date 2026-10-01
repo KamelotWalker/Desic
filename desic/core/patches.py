@@ -292,6 +292,15 @@ class PatchedTask:
             raise AttributeError(name)
         return getattr(self.base, name)
 
+    def __getstate__(self) -> dict:
+        # Checkpoints only speed up retracting consolidated labels; saving all of them would make
+        # a 10k-label student ~5× larger on disk (243 vs 52 MB). Only the base as it was wrapped is
+        # kept, so after a restart such a retraction replays from there until new checkpoints form.
+        state = dict(self.__dict__)
+        state["checkpoints"] = self.checkpoints[:1]
+        state["_last"] = None
+        return state
+
     @property
     def probation(self) -> int:
         """How many of the latest labels are still on probation (reversible in O(1))."""
@@ -463,6 +472,9 @@ class PatchedTask:
         pend = {i for i in ids if not self.store.entries[i].consolidated}
         cons = ids - pend
         for i in ids:
+            src = self.store.entries[i].source
+            if self.labels_by_source.get(src):
+                self.labels_by_source[src] -= 1
             for nid, ds, dc in self.store.entries[i].touched:
                 nb = self.store.entries.get(nid)
                 if nb is not None:

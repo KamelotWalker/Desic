@@ -108,3 +108,15 @@ def test_gate_per_answer_falls_back_to_the_shared_cell():
     assert g.weights("3≠:billing")[1] == shared  # an answer not seen yet starts from the shared cell
     g.forget(set(range(20)))
     assert g.weights("3≠:sales") == (0.5, 0.5)
+
+
+def test_only_the_wrapped_base_checkpoint_is_saved():
+    t = task(probation=5, min_probation=5, replay=0, checkpoint_every=20)
+    data = rows(120)
+    for i, (s, y) in enumerate(data):
+        t.learn(s, y, source="dataset", ref=f"e{i}")
+    assert len(t.checkpoints) > 1
+    t2 = pickle.loads(pickle.dumps(t))
+    assert [c[0] for c in t2.checkpoints] == [0]
+    stats = t2.retract(["e10"])  # still correct after a restart, it just replays from the start
+    assert stats["consolidated"] == 1 and stats["replayed"] == len(t2.log)

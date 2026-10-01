@@ -111,7 +111,7 @@ def test_retract_rebuild_snapshot_rollback(client):
     versions = [s["version"] for s in client.get("/v1/questions/department/snapshots").json()]
     assert snap["version"] in versions
     back = client.post("/v1/questions/department/rollback", json={"version": snap["version"]}).json()
-    assert back["labels"] == 201
+    assert back["labels"] == 200  # the snapshot was taken after the retraction, which applied at once
 
 
 def test_settings_patch_and_reset(client):

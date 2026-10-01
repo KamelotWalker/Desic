@@ -158,11 +158,18 @@ class Storage:
             self.conn.commit()
 
     # --------------------------------------------------------------- snapshots
+    KEEP_AUTOMATIC = 10  # automatic snapshots kept per task (a large student pickles to tens of MB)
+
     def save_snapshot(self, name: str, version: int, labels: int, metrics: dict, task: Any, note: str = "") -> None:
         self._exec(
             "INSERT OR REPLACE INTO snapshots(task, version, created_at, labels, note, metrics, state) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (name, version, time.time(), labels, note, _dumps(metrics), pickle.dumps(task, protocol=pickle.HIGHEST_PROTOCOL)),
         )
+        if note == "automatic":  # manual and "before rebuild" snapshots are never pruned
+            self._exec(
+                """DELETE FROM snapshots WHERE task=? AND note='automatic' AND version NOT IN (
+                   SELECT version FROM snapshots WHERE task=? AND note='automatic' ORDER BY version DESC LIMIT ?)""",
+                (name, name, self.KEEP_AUTOMATIC))
 
     def list_snapshots(self, name: str) -> list[dict]:
         rows = self._all("SELECT task, version, created_at, labels, note, metrics FROM snapshots WHERE task=? ORDER BY version DESC", (name,))

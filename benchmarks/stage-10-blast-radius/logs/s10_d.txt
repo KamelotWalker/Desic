@@ -1,0 +1,18 @@
+  burst seed 0: 267.5s
+  burst seed 1: 264.7s
+  burst seed 2: 262.7s
+
+burst
+  victim_before                0.7667 ± 0.063
+  victim_after                 0.0083 ± 0.014
+  victim_as_attack_label       0.9333 ± 0.072
+  others_drop                  0.0377 ± 0.009
+  recovery_half_life           2833 ± 6.8e+02
+  victim_final                 0.75 ± 0.1
+  victim_after_undo            0.7667 ± 0.063
+  accuracy_change_after_undo   0 ± 0
+  undo_events_replayed         5001 ± 0
+  undo_seconds                 47.17 ± 0.46
+  others_harm_at_0             0.0377 ± 0.009
+  others_harm_at_600           0.0012 ± 0.0017
+  others_harm_at_1000          0.0003 ± 0.0006

@@ -256,7 +256,7 @@ class PatchedTask:
                  keep_checkpoints: int = 4, trust_sim: float = 0.5, gate_by_answer: bool = True,
                  gate_sources: tuple[str, ...] = ("human", "dataset", "teacher"), gate_prior: float = 0.5,
                  retire_below: float = 0.0, rehearse_min_support: float = 0.0, rehearse_if_base_agrees: float = 0.5,
-                 seed: int = 0, **store: Any) -> None:
+                 consolidate_damping: float = 0.0, seed: int = 0, **store: Any) -> None:
         self.base = base
         # Probation is ``probation_share`` of the labels seen, between ``min_probation`` and
         # ``probation``: a small question still trains its experts early (undoing an old label
@@ -277,6 +277,9 @@ class PatchedTask:
         # rehearse only entries the base itself gives at least this probability (a lie or an outdated
         # meaning contradicts the rest of what the base knows, so it is not drilled in again)
         self.rehearse_if_base_agrees = rehearse_if_base_agrees
+        # an entry the base finds less plausible than this is consolidated with proportionally less
+        # weight, so a burst of wrong labels spreads less when it leaves probation (0 = off)
+        self.consolidate_damping = consolidate_damping
         self.calibrator = TemperatureCalibrator()
         self.calib_log: deque = deque(maxlen=self.calibrator.samples.maxlen)  # (entry id, raw, label)
         # What users see is the patched task: it takes over the served-quality metrics, the
@@ -462,7 +465,12 @@ class PatchedTask:
         return events
 
     def _consolidate(self, p: Patch) -> list[dict]:
-        events = self.base.learn(p.state, p.target, source=p.source, weight=p.weight, ref=p.ref)
+        weight, damp = p.weight, getattr(self, "consolidate_damping", 0.0)
+        if damp:
+            plausible = self.base.answer(p.state)["raw"].get(p.label, 0.0)
+            if plausible < damp:
+                weight *= max(plausible / damp, 0.1)
+        events = self.base.learn(p.state, p.target, source=p.source, weight=weight, ref=p.ref)
         self._rehearse(exclude=p.id)
         p.consolidated = True
         p.log_pos = len(self.log)

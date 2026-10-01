@@ -35,7 +35,11 @@ def make_patched(classes: list[str], settings: dict | None = None, **kw: Any) ->
     return PatchedTask(make_desic(classes, settings), **kw)
 
 
-LEARNERS: dict[str, Make] = {"desic": make_desic, "desic+patch": make_patched}
+def make_patched_sources(classes: list[str], settings: dict | None = None, **kw: Any) -> PatchedTask:
+    return make_patched(classes, settings, source_trust=True, **kw)
+
+
+LEARNERS: dict[str, Make] = {"desic": make_desic, "desic+patch": make_patched, "desic+patch+sources": make_patched_sources}
 
 
 def _shuffled(train: list[Item], seed: int) -> list[Item]:

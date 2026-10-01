@@ -393,7 +393,8 @@ class Desic:
                 event_id = self.storage.add_event(name, d["state"], label, source, 1.0, decision_id)
                 events = task.learn(d["state"], label, source="human" if source == "human" else "dataset",
                                     served=student.get("probabilities"), served_raw=student.get("raw"),
-                                    abstained=bool(student.get("abstain")), ref=_ref(event_id))
+                                    abstained=bool(student.get("abstain")), ref=_ref(event_id),
+                                    served_action=(stored.get("source", "student"), stored.get("answer_label")))
                 served = task.__dict__.setdefault("served", {"labels": 0, "correct": 0})
                 served["labels"] += 1
                 correct = stored.get("answer_label") == label

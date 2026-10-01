@@ -294,6 +294,7 @@ def teacher(make: Make, train: list[Item], test: list[Item], classes: list[str],
     trng = random.Random(seed * 1000 + 17)
     task = make(classes)
     windows, cur = [], {"teacher": 0, "teacher_right": 0, "answered": 0, "answered_right": 0, "human": 0}
+    served_wrong = [0, 0]  # whole stream, second half: what the user was actually given, whoever answered
     totals = dict.fromkeys(cur, 0)
     t0 = time.time()
     for i, (x, y) in enumerate(stream, 1):
@@ -309,9 +310,14 @@ def teacher(make: Make, train: list[Item], test: list[Item], classes: list[str],
             task.learn(x, {said: c, second: 1 - c}, source="teacher")
             cur["teacher"] += 1
             cur["teacher_right"] += right
+            served_ok = right
         else:
             cur["answered"] += 1
-            cur["answered_right"] += confidence_of(a["probabilities"])[0] == y
+            served_ok = confidence_of(a["probabilities"])[0] == y
+            cur["answered_right"] += served_ok
+        served_wrong[0] += not served_ok
+        if i > len(stream) // 2:
+            served_wrong[1] += not served_ok
         if trng.random() < human_rate:
             task.learn(x, y, source="human", served=a["probabilities"], served_raw=a["raw"], abstained=pub["abstain"])
             cur["human"] += 1
@@ -320,6 +326,7 @@ def teacher(make: Make, train: list[Item], test: list[Item], classes: list[str],
             windows.append({"decisions": i, "teacher_rate": round(cur["teacher"] / size, 4),
                             "coverage": round(cur["answered"] / size, 4),
                             "answered_accuracy": round(cur["answered_right"] / cur["answered"], 4) if cur["answered"] else None,
+                            "served_error": round(1 - (cur["answered_right"] + cur["teacher_right"]) / size, 4),
                             "teacher_accuracy": round(cur["teacher_right"] / cur["teacher"], 4) if cur["teacher"] else None})
             for k in cur:
                 totals[k] += cur[k]
@@ -329,7 +336,9 @@ def teacher(make: Make, train: list[Item], test: list[Item], classes: list[str],
         "headline": {"teacher_rate_first": windows[0]["teacher_rate"], "teacher_rate_last": windows[-1]["teacher_rate"],
                      "answered_accuracy_last": windows[-1]["answered_accuracy"], "teacher_calls": totals["teacher"],
                      "human_labels": totals["human"], "test_accuracy": final["accuracy"], "test_ece": final["ece"],
-                     "test_coverage": final["coverage"], "test_answered_accuracy": final["answered_accuracy"]},
+                     "test_coverage": final["coverage"], "test_answered_accuracy": final["answered_accuracy"],
+                     "served_error": round(served_wrong[0] / len(stream), 4),
+                     "served_error_second_half": round(served_wrong[1] / (len(stream) - len(stream) // 2), 4)},
         "windows": windows, "teacher_accuracy": round(totals["teacher_right"] / max(totals["teacher"], 1), 4),
         "final": final, "seconds": round(time.time() - t0, 1),
     }

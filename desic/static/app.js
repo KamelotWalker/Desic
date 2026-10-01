@@ -573,6 +573,9 @@ function renderLive(q) {
     kpi('Log loss', dec(m.nll, 2), `Brier ${dec(m.brier, 3)} · proper scoring rules`),
     kpi('Answered accuracy', pct(m.answered_accuracy), `abstains on ${pct(m.abstain_rate)} of decisions`),
     kpi('Teacher calls', pct(m.teacher_rate), `${num(m.teacher_calls)} of ${num(m.decisions)} decisions`),
+    kpi('Served error', m.served_actions && m.served_actions.error != null ? pct(m.served_actions.error) : '—',
+      m.served_actions && m.served_actions.labels ? Object.entries(m.served_actions.by_source).map(([k, v]) => `${k} ${pct(v.error)}`).join(' · ') : 'what users got, whoever answered',
+      'Wrong answers among everything users were actually given — student, teacher or hard rule — on decisions with feedback'),
     kpi('Labels', num(q.labels), src),
     kpi('Awaiting feedback', num(q.pending), `temperature ${dec(q.temperature, 2)}`));
   $('#chart-curve').replaceChildren(lineChart({

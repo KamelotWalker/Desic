@@ -408,7 +408,9 @@ class PatchedTask:
     # ----------------------------------------------------------------- learn
     def learn(self, state: Any, target: str | Dist, source: str = "human", weight: float | None = None,
               served: Dist | None = None, served_raw: Dist | None = None, abstained: bool = False,
-              ref: str | None = None) -> list[dict]:
+              ref: str | None = None, served_action: tuple[str, str] | None = None) -> list[dict]:
+        """``served_action`` = (who answered: student/teacher/rule, the answer the user got),
+        so the risk of what was actually served is tracked too (and undone with the label)."""
         spec = self.base.spec
         if not isinstance(target, dict):
             label = spec.label_of(target)
@@ -439,6 +441,8 @@ class PatchedTask:
                 served = self._serve(f)[0]
             self.metrics.update(served, p.label, abstained, spec.option_names if spec.type == SCORE else None, ref=p.id)
             p.metric = self.metrics.last_contribution
+            if served_action is not None:
+                self.metrics.record_served(served_action[0], served_action[1] == p.label, ref=p.id)
             self.calibrator.add(f["raw"], p.label)
             self.calib_log.append((p.id, f["raw"], p.label))
         self.labels_by_source[source] = self.labels_by_source.get(source, 0) + 1

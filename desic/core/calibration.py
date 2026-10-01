@@ -134,6 +134,8 @@ class TaskMetrics:
         self._every = 1
         self.decisions: deque = deque(maxlen=500)  # (abstained, teacher_called) per decision
         self.served: deque = deque(maxlen=1000)  # confidence of each recent decision, labelled or not
+        # what the user was actually given (student, teacher or rule answer) and whether it was right
+        self.served_actions: deque = deque(maxlen=1000)  # (ref, source, correct)
         self.teacher_calls = 0
         self.decisions_total = 0
 
@@ -185,6 +187,22 @@ class TaskMetrics:
                 self._every *= 2
         return ok
 
+    def record_served(self, source: str, correct: bool, ref: Any = None) -> None:
+        """Score the action that was served (whoever produced it) against the label."""
+        if not hasattr(self, "served_actions"):
+            self.served_actions = deque(maxlen=1000)
+        self.served_actions.append((ref, source, bool(correct)))
+
+    def served_summary(self) -> dict:
+        acts = list(getattr(self, "served_actions", ()))
+        by: dict[str, list[int]] = {}
+        for _, src, ok in acts:
+            c = by.setdefault(src, [0, 0])
+            c[0] += 1
+            c[1] += ok
+        return {"labels": len(acts), "error": round(1 - sum(ok for *_, ok in acts) / len(acts), 4) if acts else None,
+                "by_source": {k: {"labels": n, "error": round(1 - ok / n, 4)} for k, (n, ok) in sorted(by.items())}}
+
     def forget(self, contributions: list[tuple]) -> int:
         """Take retracted labels back out: their records leave the window and their share of
         the running totals is subtracted. ``contributions`` are ``last_contribution`` tuples
@@ -193,6 +211,8 @@ class TaskMetrics:
         refs = {c[0] for c in contributions}
         if not refs:
             return 0
+        if hasattr(self, "served_actions"):
+            self.served_actions = deque((a for a in self.served_actions if a[0] not in refs), maxlen=self.served_actions.maxlen)
         self.records = deque((r for r in self.records if not (len(r) > 6 and r[6] in refs)), maxlen=self.records.maxlen)
         for _, ok, nll, brier, label, pred in contributions:
             self.n -= 1
@@ -226,6 +246,7 @@ class TaskMetrics:
             "ece": ece,
             "reliability": bins,
             "risk_coverage": risk_coverage(pairs),
+            "served_actions": self.served_summary(),
             "answered_accuracy": round(sum(r[1] for r in answered) / len(answered), 4) if answered else None,
             "abstain_rate": round(sum(a for a, _ in dec) / len(dec), 4) if dec else None,
             "teacher_rate": round(sum(t for _, t in dec) / len(dec), 4) if dec else None,

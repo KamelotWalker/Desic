@@ -299,7 +299,7 @@ class DecisionTask:
     # ------------------------------------------------------------------ learn
     def learn(self, state: Any, target: str | Dist, source: str = "human", weight: float | None = None,
               served: Dist | None = None, served_raw: Dist | None = None, abstained: bool = False,
-              ref: str | None = None, replay: bool = False) -> list[dict]:
+              ref: str | None = None, replay: bool = False, served_action: tuple[str, str] | None = None) -> list[dict]:
         """Learn one example. ``served``/``served_raw`` are the (calibrated / raw)
         probabilities the user actually saw; when omitted the task predicts
         first (test-then-train) so the metrics stay prequential.
@@ -337,6 +337,8 @@ class DecisionTask:
                 raw, _ = self.mixture.combine(preds, opts)
                 served_raw, served = raw, self.calibrator.apply(raw)
             ok = self.metrics.update(served, label, abstained, opts if self.spec.type == SCORE else None)
+            if served_action is not None:
+                self.metrics.record_served(served_action[0], served_action[1] == label)
             if served_raw is not None:
                 self.calibrator.add(served_raw, label)
             if self.drift.update(not ok) == DRIFT:

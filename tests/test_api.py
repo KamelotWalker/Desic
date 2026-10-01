@@ -287,3 +287,21 @@ def test_replay_a_candidate_policy_on_past_decisions(client):
     after = client.get("/v1/questions/department").json()
     assert after["version"] == before["version"] and after["policy"] == before["policy"]  # nothing changed
     assert after["settings"]["abstain_threshold"] == 0.6
+
+
+def test_served_action_risk_counts_rules_and_is_undone_with_the_label(client):
+    teach_department(client, n=200)
+    rules = [{"name": "legal", "decision": "sales", "priority": 5, "conditions": [{"feature": "$text", "op": "contains", "value": "lawyer"}]}]
+    client.put("/v1/questions/department/rules", json={"rules": rules})
+    r = client.post("/v1/decide", json={"state": "my lawyer says the refund is late", "questions": {"department": {}}}).json()
+    assert r["answers"]["department"]["source"] == "rule"
+    client.post("/v1/feedback", json={"decision_id": r["id"], "answers": {"department": "billing"}})  # the rule was wrong
+    r2 = client.post("/v1/decide", json={"state": "refund my invoice please", "questions": {"department": {}}}).json()
+    client.post("/v1/feedback", json={"decision_id": r2["id"], "answers": {"department": "billing"}})
+    sa = client.get("/v1/questions/department").json()["metrics"]["served_actions"]
+    assert sa["labels"] == 2 and sa["error"] == 0.5
+    assert sa["by_source"]["rule"] == {"labels": 1, "error": 1.0} and sa["by_source"]["student"]["error"] == 0.0
+    ev = next(e for e in client.get("/v1/questions/department/feedback?limit=5").json() if e["decision_id"] == r["id"])
+    client.post(f"/v1/feedback/{ev['id']}/retract")
+    sa = client.get("/v1/questions/department").json()["metrics"]["served_actions"]
+    assert sa["labels"] == 1 and "rule" not in sa["by_source"]

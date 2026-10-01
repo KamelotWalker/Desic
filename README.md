@@ -197,7 +197,7 @@ Doğruluk tek başına yetmiyor: model akış boyunca nasıl öğreniyor, hatal�
 | Drift yarı ömrü | 3.000 etiket | 3.417 etiket (kötü) |
 | Aynı mesajda yanlış etiketi tekrarlama | %7 | %11 (kötü; [aşama 06](benchmarks/stage-06-diagnosis/) öncesi %23) |
 
-**Karar kontratı** (`desic/core/contract.py`, [aşama 07](benchmarks/stage-07-decision-contract/)): sabit bir eşik yerine bir soruya *risk bütçesi* ("cevapların en fazla %5'i yanlış olsun") ya da *maliyetler* (yanlış cevap vs. öğretmene sormak; asimetrik hatalar için maliyet matrisi) verilebilir. Bütçe ölçümde tutuluyor: %2 / %5 / %10 bütçeyle gerçekleşen hata %1,4 / %4,0 / %8,5. Her karar kural, eşik, propensity ve politika sürümüyle kaydedilir. Bilinen sınır: geri bildirim seyrekken bütçe çok temkinli davranıp çoğu soruyu öğretmene yönlendiriyor.
+**Karar kontratı** (`desic/core/contract.py`, [aşama 07](benchmarks/stage-07-decision-contract/)): sabit bir eşik yerine bir soruya *risk bütçesi* ("cevapların en fazla %5'i yanlış olsun") ya da *maliyetler* (yanlış cevap vs. öğretmene sormak; asimetrik hatalar için maliyet matrisi) verilebilir. Bütçe ölçümde tutuluyor: %2 / %5 / %10 bütçeyle gerçekleşen hata %1,4 / %4,0 / %8,5. Her karar kural, eşik, propensity ve politika sürümüyle kaydedilir. İki mod var: *garantili* (etiketler kanıtlamalı; güvenli ama etiket azken çok soru sorar) ve *beklenen* (modelin kalibre güveni + etiketlerle düzeltme; [aşama 08](benchmarks/stage-08-expected-risk-budget/): öğretmenli senaryoda %95 doğru cevap, öğretmene gidenler %93 → %71).
 
 Tüm aşamaların ölçümleri, ham loglar ve JSON sonuçları: [`benchmarks/`](benchmarks/).
 
@@ -214,7 +214,7 @@ Referans: yayınlanmış sonuçlarda (Casanueva ve ark., 2020) tam veriyle ince 
 
 ```bash
 pip install -e '.[dev]'
-pytest                      # 85 test: çekirdek, API, öğretmen/üretim, nöral öğrenci (torch yoksa atlanır), değerlendirme
+pytest                      # 87 test: çekirdek, API, öğretmen/üretim, nöral öğrenci (torch yoksa atlanır), değerlendirme
 desic eval --seeds 1        # akış senaryoları (Banking77)
 desic serve --reload
 ```

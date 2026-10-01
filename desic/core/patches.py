@@ -111,6 +111,7 @@ class SourceTrust:
         self.power = power
         self.stats: dict[str, list[float]] = {}  # annotator -> [agree, disagree, t_ref]
         self._cache: tuple[int, float] | None = None
+        self.history: dict[str, list[tuple[int, float]]] = {}  # annotator -> (time, weight) after each change
 
     def _fade(self, a: str, now: int) -> list[float]:
         st = self.stats.setdefault(a, [0.0, 0.0, float(now)])
@@ -126,6 +127,25 @@ class SourceTrust:
         st[0] += agree
         st[1] += disagree
         self._cache = None
+        self._log(a, now)
+
+    def _log(self, a: str, now: int, keep: int = 2000) -> None:
+        h = self.history.setdefault(a, [])
+        w = self.weight(a, now)
+        if h and h[-1][0] == now:
+            h[-1] = (now, w)
+        else:
+            h.append((now, w))
+        if len(h) > 64 and h[0][0] < now - keep:
+            self.history[a] = [x for x in h if x[0] >= now - keep]
+
+    def lowest(self, a: str | None, since: int, now: int) -> float:
+        """Lowest weight the annotator had between ``since`` and now: a label is judged by the
+        worst its source looked while the label was on probation, not by a later recovery."""
+        if a is None or a not in self.stats:
+            return 1.0
+        ws = [w for t, w in self.history.get(a, ()) if t >= since]
+        return min([self.weight(a, now), *ws])
 
     def remove(self, a: str, agree: float, disagree: float, at: int, now: int) -> None:
         st = self._fade(a, now)
@@ -133,6 +153,9 @@ class SourceTrust:
         st[0] = max(0.0, st[0] - agree * f)
         st[1] = max(0.0, st[1] - disagree * f)
         self._cache = None
+        if a in self.history:  # the logged low points included the retracted labels: recompute from now on
+            self.history[a] = [(t, w) for t, w in self.history[a] if t < at]
+        self._log(a, now)
 
     def _rate(self, a: str, now: int) -> float | None:
         """Share of this annotator's cross-annotator comparisons that disagreed (faded)."""
@@ -560,7 +583,7 @@ class PatchedTask:
     def _consolidate(self, p: Patch) -> list[dict]:
         weight, damp = p.weight, getattr(self, "consolidate_damping", 0.0)
         if getattr(self, "sources", None) is not None:
-            weight *= self._source_weight(getattr(p, "annotator", None))
+            weight *= self.sources.lowest(getattr(p, "annotator", None), p.t, self.t)
         if damp:
             plausible = self.base.answer(p.state)["raw"].get(p.label, 0.0)
             if plausible < damp:

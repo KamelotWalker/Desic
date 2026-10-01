@@ -197,6 +197,8 @@ Doğruluk tek başına yetmiyor: model akış boyunca nasıl öğreniyor, hatal�
 | Drift yarı ömrü | 3.000 etiket | 3.417 etiket (kötü) |
 | Aynı mesajda yanlış etiketi tekrarlama | %7 | %11 (kötü; [aşama 06](benchmarks/stage-06-diagnosis/) öncesi %23) |
 
+**Karar kontratı** (`desic/core/contract.py`, [aşama 07](benchmarks/stage-07-decision-contract/)): sabit bir eşik yerine bir soruya *risk bütçesi* ("cevapların en fazla %5'i yanlış olsun") ya da *maliyetler* (yanlış cevap vs. öğretmene sormak; asimetrik hatalar için maliyet matrisi) verilebilir. Bütçe ölçümde tutuluyor: %2 / %5 / %10 bütçeyle gerçekleşen hata %1,4 / %4,0 / %8,5. Her karar kural, eşik, propensity ve politika sürümüyle kaydedilir. Bilinen sınır: geri bildirim seyrekken bütçe çok temkinli davranıp çoğu soruyu öğretmene yönlendiriyor.
+
 Tüm aşamaların ölçümleri, ham loglar ve JSON sonuçları: [`benchmarks/`](benchmarks/).
 
 Referans: yayınlanmış sonuçlarda (Casanueva ve ark., 2020) tam veriyle ince ayarlı BERT / ConveRT yaklaşık %93. Desic'in önceden eğitilmiş bir dil bilgisi yok; bu fark beklenen bir fark. Önceden eğitilmiş bir backbone (mmBERT / ModernBERT) ile nöral öğrenci GPU'da ayrıca ölçülmeli. Sıralı akıştaki çöküş bilinen bir zayıflık (catastrophic forgetting) ve bir sonraki geliştirme hattının ilk hedefi.
@@ -212,14 +214,14 @@ Referans: yayınlanmış sonuçlarda (Casanueva ve ark., 2020) tam veriyle ince 
 
 ```bash
 pip install -e '.[dev]'
-pytest                      # 75 test: çekirdek, API, öğretmen/üretim, nöral öğrenci (torch yoksa atlanır), değerlendirme
+pytest                      # 85 test: çekirdek, API, öğretmen/üretim, nöral öğrenci (torch yoksa atlanır), değerlendirme
 desic eval --seeds 1        # akış senaryoları (Banking77)
 desic serve --reload
 ```
 
 ```
 desic/
-  core/        features · experts · calibration · task · patches (geri alınabilir katman) · tree · model (adaptif ağaç) · drift · rules
+  core/        features · experts · calibration · task · contract (karar kontratı) · patches (geri alınabilir katman) · tree · model (adaptif ağaç) · drift · rules
   eval/        data (Banking77) · metrics (prequential, seçici risk, forgetting, half-life) · scenarios · run
   neural/      text (girdi biçimi) · model (encoder + decision head) · train (kayıplar, RLCD, kalibrasyon) · runtime (kapılar)
   service.py   kararlar, feedback, öğretmen, işler, snapshot/rebuild

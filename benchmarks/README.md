@@ -12,6 +12,7 @@ Her geliştirme aşamasının ölçümleri burada **ayrı bir klasörde** ve de�
 | 04 | [`stage-04-service-integration`](stage-04-service-integration/) | Patch katmanı dashboard/API'de; deneme süresi etiketlerin %10'u (20–500); kontrol: temel model + 10× hafıza | Karışık %89,3 ve biriken hata artık temel modelden iyi; sıralı %80,2 (10× hafızalı temel model: %12,7); hâlâ kötü: drift (3.500), yanlış tekrarlama (~%23), öğretmenli senaryoda cevap doğruluğu (%85,6) |
 | 05 | [`stage-05-trust-gate-variants-rejected`](stage-05-trust-gate-variants-rejected/) | Kalan üç zayıflık için 4 güven/kapı varyantı (tek tohum) | **Reddedildi:** hiçbiri drift, yanlış tekrarlama ya da öğretmenli doğrulukta belirgin iyileşme sağlamadı; sebep tahmini yanlıştı |
 | 06 | [`stage-06-diagnosis`](stage-06-diagnosis/) | Parça parça teşhis: kalıcı model, patch'ler, kapı. Tekrar çalışma deneyleri ve seçilen ayarın 3 tohumluk ölçümü | Ortak sebep kalıcı modele tekrar çalışma; "model makul buluyorsa tekrar çalış" ile yanlış tekrarlama %21–24 → %11, karışık %89,0; drift ve öğretmenli senaryo değişmedi |
+| 07 | [`stage-07-decision-contract`](stage-07-decision-contract/) | Faz 1: maliyetler, maliyet matrisi, risk bütçesi; karar kaydı | Bütçe tutuluyor (%2/%5/%10 → %1,4/%4,0/%8,5 hata, kapsam en iyi olasının %86–96'sı); seyrek geri bildirimde aşırı temkinli (öğretmenli senaryoda %93 soruyor, ama test doğruluğu %74,5) |
 
 ## Her aşama klasöründe
 

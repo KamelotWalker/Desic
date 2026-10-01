@@ -358,12 +358,12 @@ def budget(make: Make, train: list[Item], test: list[Item], classes: list[str], 
         recs.append(conf_ok)
         task.metrics.record_decision(False, False, conf_ok[0])
         for name, (b, mode) in policies.items():
-            task.settings["risk_budget"], task.settings["risk_budget_mode"] = b, mode
+            task.policy.risk_budget, task.policy.risk_budget_mode = b, mode or "guaranteed"
             pub = task.public(a)
             if not pub["abstain"]:
                 cur[name][0] += 1
                 cur[name][1] += pub["choice"] != y
-        task.settings["risk_budget"] = None
+        task.policy.risk_budget = None
         task.learn(x, y, source="dataset", served=a["probabilities"], served_raw=a["raw"])
         if i % window == 0:
             for name, (b, _) in policies.items():

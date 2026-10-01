@@ -27,7 +27,8 @@ from .core.features import state_hash as state_hash_of
 from .core.features import state_text
 from .core.rules import first_match, validate_rule
 from .core.schema import to_label, to_number
-from .core import contract
+from .core.policy import KEYS as POLICY_KEYS
+from .core.policy import replay as replay_policy
 from .core.patches import PatchedTask
 from .core.task import CHOICE, NOUL, SCORE, DecisionTask, QuestionSpec, SpecError
 from .generation import design_task, generate_examples, normalize_design
@@ -206,11 +207,8 @@ class Desic:
                     if k in task.spec.options:
                         task.spec.options[k] = str(v or "")
             settings = patch.get("settings") or {}
-            if "abstain_threshold" in settings:
-                t = float(settings["abstain_threshold"])
-                if not 0 <= t <= 1:
-                    raise ValueError("abstain_threshold must be between 0 and 1")
-                task.settings["abstain_threshold"] = t
+            # decision policy (when to answer) — versioned on its own, the model is not touched
+            task.policy.update({k: v for k, v in settings.items() if k in POLICY_KEYS}, task.spec.option_names)
             if "teacher_mode" in settings:
                 if settings["teacher_mode"] not in ("off", "on_abstain", "always"):
                     raise ValueError("teacher_mode must be off, on_abstain or always")
@@ -220,10 +218,24 @@ class Desic:
                 if not 0 <= w <= 1:
                     raise ValueError("teacher_weight must be between 0 and 1")
                 task.settings["teacher_weight"] = w
-            task.settings.update(contract.validate(settings, task.spec.option_names))
         self.persist(task)
         self.bus.publish({"type": "task_updated", "task": name})
         return self.task_detail(name)
+
+    def replay_policy(self, name: str, settings: dict, limit: int = 2000) -> dict:
+        """What would a candidate policy have done on past decisions that got feedback?
+        Replays it on the probabilities the student served then; the model is not touched."""
+        task = self.get(name)
+        with self.lock(name):
+            candidate = copy.deepcopy(task.policy)
+            candidate.update({k: v for k, v in (settings or {}).items() if k in POLICY_KEYS}, task.spec.option_names)
+            current = task.policy
+            metrics = copy.deepcopy(task.metrics)
+        rows = self.storage.list_answers(name, max(1, min(int(limit), 10000)), labelled=True)
+        logged = [(r["result"].get("student", {}).get("probabilities"), r["label"]) for r in rows]
+        return {"task": name, "decisions_with_feedback": sum(1 for p, _ in logged if p),
+                "current": {"policy_version": current.version, **replay_policy(current, logged, metrics)},
+                "candidate": {"settings": candidate.settings(), **replay_policy(candidate, logged, metrics)}}
 
     def delete_task(self, name: str) -> None:
         self.get(name)
@@ -284,7 +296,7 @@ class Desic:
             with self.lock(name):
                 internal = task.answer(state, options)
                 pub = task.public(internal, abstain_threshold)
-                pub["decision"]["policy_version"] = task.version  # logged with the decision for later audits
+                pub["decision"]["model_version"] = task.version  # with the policy version: what decided, and on what state
                 exp = task.explain(internal) if explain else None
                 rule = first_match(task.rules, {**internal["feats"].flat, "$text": state_text(state)})
             student = {"probabilities": internal["probabilities"], "raw": internal["raw"], "abstain": pub["abstain"],

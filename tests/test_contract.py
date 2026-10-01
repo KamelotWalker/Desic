@@ -63,7 +63,7 @@ def test_risk_budget_keeps_answered_errors_down():
     stream = [ticket(rng)[:2] for _ in range(1500)]
     for s, y in stream[:150]:
         t.learn(s, y, source="dataset")
-    t.settings["risk_budget"] = 0.02
+    t.policy.risk_budget = 0.02
     answered = wrong = 0
     for s, y in stream[150:]:
         a = t.answer(s)

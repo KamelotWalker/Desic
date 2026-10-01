@@ -87,6 +87,11 @@ class SnapshotIn(BaseModel):
     note: str = ""
 
 
+class ReplayPolicyIn(BaseModel):
+    settings: dict[str, Any] = {}
+    limit: int = Field(2000, ge=1, le=10000)
+
+
 class RetractRecentIn(BaseModel):
     n: int = Field(1, ge=1, le=1000)
     sources: list[str] | None = None
@@ -247,6 +252,10 @@ def create_app(data_dir: str | None = None, teacher: ProviderConfig | None = Non
     @app.post("/v1/feedback/{event_id}/restore")
     async def restore(event_id: int):
         return await asyncio.to_thread(svc().retract, event_id, False)
+
+    @app.post("/v1/questions/{name}/policy/replay")
+    async def replay_policy(name: str, body: ReplayPolicyIn):
+        return await asyncio.to_thread(svc().replay_policy, name, body.settings, body.limit)
 
     @app.post("/v1/questions/{name}/retract-recent")
     async def retract_recent(name: str, body: RetractRecentIn):

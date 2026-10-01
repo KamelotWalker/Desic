@@ -263,10 +263,27 @@ def test_decision_contract_settings_and_logging(client):
     assert r.status_code == 200 and r.json()["settings"]["cost_wrong"] == 10.0
     d = client.post("/v1/decide", json={"state": "refund my invoice please", "questions": {"department": {}}}).json()
     dec = d["answers"]["department"]["decision"]
-    assert dec["rule"] == "costs" and dec["threshold"] == 0.9 and dec["propensity"] == 1.0 and dec["policy_version"] >= 200
+    assert dec["rule"] == "costs" and dec["threshold"] == 0.9 and dec["propensity"] == 1.0
+    assert dec["policy_version"] == 2 and dec["model_version"] >= 200  # P1: logged separately
     bad = client.patch("/v1/questions/department", json={"settings": {"risk_budget": 2}})
     assert bad.status_code == 400
     r = client.patch("/v1/questions/department", json={"settings": {"cost_wrong": None, "cost_abstain": None, "risk_budget": 0.05}})
     assert r.json()["settings"]["cost_wrong"] is None and r.json()["settings"]["risk_budget"] == 0.05
     logged = client.get(f"/v1/decisions/{d['id']}").json()["answers"]["department"]
     assert logged["decision"]["rule"] == "costs" and logged["decision"]["policy_version"] == dec["policy_version"]
+    assert logged["decision"]["model_version"] == dec["model_version"]
+
+
+def test_replay_a_candidate_policy_on_past_decisions(client):
+    teach_department(client, n=200)
+    rng = random.Random(9)
+    for t, d, _ in (ticket(rng) for _ in range(40)):
+        r = client.post("/v1/decide", json={"state": t, "questions": {"department": {}}}).json()
+        client.post("/v1/feedback", json={"decision_id": r["id"], "answers": {"department": d}})
+    before = client.get("/v1/questions/department").json()
+    rep = client.post("/v1/questions/department/policy/replay", json={"settings": {"abstain_threshold": 0.99}}).json()
+    assert rep["decisions_with_feedback"] == 40
+    assert rep["candidate"]["coverage"] <= rep["current"]["coverage"]
+    after = client.get("/v1/questions/department").json()
+    assert after["version"] == before["version"] and after["policy"] == before["policy"]  # nothing changed
+    assert after["settings"]["abstain_threshold"] == 0.6

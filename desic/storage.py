@@ -202,11 +202,14 @@ class Storage:
     def set_answer_label(self, decision_id: str, task: str, label: str) -> None:
         self._exec("UPDATE decision_answers SET label=? WHERE decision_id=? AND task=?", (label, decision_id, task))
 
-    def list_answers(self, task: str, limit: int = 50, pending: bool = False, uncertain_first: bool = False) -> list[dict]:
+    def list_answers(self, task: str, limit: int = 50, pending: bool = False, uncertain_first: bool = False,
+                     labelled: bool = False) -> list[dict]:
         sql = """SELECT a.*, d.state, d.answers FROM decision_answers a JOIN decisions d ON d.id = a.decision_id
                  WHERE a.task=?"""
         if pending:
             sql += " AND a.label IS NULL"
+        if labelled:
+            sql += " AND a.label IS NOT NULL"
         sql += " ORDER BY a.confidence ASC, a.created_at DESC" if uncertain_first else " ORDER BY a.created_at DESC"
         sql += " LIMIT ?"
         out = []

@@ -769,16 +769,28 @@ function tabSettings(q) {
     .map(([v, l]) => h('option', { value: v, selected: v === (q.settings.risk_budget_mode || 'guaranteed') }, l)));
   const opt = v => (v === '' ? null : +v);
   const add = q.type === 'choice' ? h('input', { placeholder: 'new answer name' }) : null;
+  const formSettings = () => ({ abstain_threshold: +thr.value, teacher_mode: mode.value, teacher_weight: +tw.value,
+    risk_budget: budget.value === '' ? null : +budget.value / 100, risk_budget_mode: bmode.value,
+    cost_wrong: opt(cw.value), cost_abstain: opt(ca.value) });
   const save = h('button', { class: 'primary' }, 'Save settings');
   save.onclick = () => guard(save, async () => {
     await api('PATCH', `/v1/questions/${enc(q.name)}`, {
       instructions: instr.value, descriptions: Object.fromEntries(descs.map(([k, i]) => [k, i.value])),
       add_options: add && add.value.trim() ? [add.value.trim()] : undefined,
-      settings: { abstain_threshold: +thr.value, teacher_mode: mode.value, teacher_weight: +tw.value,
-        risk_budget: budget.value === '' ? null : +budget.value / 100, risk_budget_mode: bmode.value,
-        cost_wrong: opt(cw.value), cost_abstain: opt(ca.value) },
+      settings: formSettings(),
     });
     toast('Saved', 'good'); await refreshQuestion(); renderTab();
+  });
+  const previewOut = h('div');
+  const preview = h('button', {}, 'Preview on past decisions');
+  preview.onclick = () => guard(preview, async () => {
+    const r = await api('POST', `/v1/questions/${enc(q.name)}/policy/replay`, { settings: formSettings() });
+    if (!r.decisions_with_feedback) { previewOut.replaceChildren(h('p', { class: 'small muted' }, 'No decisions with feedback yet to replay.')); return; }
+    const row = (label, x) => h('tr', {}, h('td', {}, label), h('td', { class: 'num' }, pct(x.coverage)), h('td', { class: 'num' }, x.risk == null ? '—' : pct(x.risk)),
+      h('td', { class: 'num' }, x.cost_per_decision == null ? '—' : dec(x.cost_per_decision, 2)));
+    previewOut.replaceChildren(h('p', { class: 'small muted' }, `Replayed on ${num(r.decisions_with_feedback)} past decisions that got feedback, with the probabilities served then. The model is not changed.`),
+      h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, ''), h('th', {}, 'answers'), h('th', {}, 'wrong among answered'), h('th', {}, 'cost / decision'))),
+        h('tbody', {}, row(`current (policy v${r.current.policy_version})`, r.current), row('these settings', r.candidate))));
   });
   return h('div', { class: 'grid-2' },
     h('div', { class: 'panel' }, h('h2', {}, 'Question'),
@@ -800,7 +812,8 @@ function tabSettings(q) {
         h('label', { class: 'field' }, h('span', {}, 'Cost of a wrong answer'), cw),
         h('label', { class: 'field' }, h('span', {}, 'Cost of escalating'), ca)),
       h('p', { class: 'small muted' }, 'Answer only when (1 − confidence) × cost of a wrong answer ≤ cost of escalating. Example: 10 and 1 → answer above 90% confidence. Asymmetric costs per answer: set cost_matrix via the API.'),
-      save));
+      h('p', { class: 'small muted' }, `Decision policy v${(q.policy || {}).version || 1} — changing it never changes what the student has learned.`),
+      h('div', { class: 'row' }, save, preview), previewOut));
 }
 
 function tabRules(q) {

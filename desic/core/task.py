@@ -19,11 +19,12 @@ import time
 from dataclasses import asdict, dataclass, field
 from typing import Any, Callable
 
-from . import contract
 from .calibration import TaskMetrics, TemperatureCalibrator, confidence_of
 from .drift import DDM, DRIFT
 from .experts import Dist, LinearExpert, MemoryExpert, Mixture, PriorExpert, TreeExpert, normalize
 from .features import Featurizer, Features, state_hash
+from .policy import KEYS as POLICY_KEYS
+from .policy import DecisionPolicy
 
 CHOICE, SCORE, NOUL = "choice", "score", "noul"
 TYPES = (CHOICE, SCORE, NOUL)
@@ -35,16 +36,11 @@ FAMILIAR = 0.5  # below this share of known evidence the answer is pulled toward
 KNOWN_WEIGHT = 0.05  # a feature counts as known once some answer's weight on it reaches this
 
 DEFAULT_SETTINGS = {
-    "abstain_threshold": 0.6,   # abstain when calibrated confidence is below this
     "teacher_mode": "on_abstain",  # off | on_abstain | always
     "teacher_weight": 0.5,      # how much a teacher label counts vs a human label (1.0)
-    # decision contract (see core/contract.py); None = not used
-    "risk_budget": None,        # at most this share of answered decisions may be wrong
-    "risk_budget_mode": "guaranteed",  # guaranteed (labels prove it) | expected (calibration-based)
-    "cost_wrong": None,         # cost of a wrong answer …
-    "cost_abstain": None,       # … vs the cost of escalating to the teacher / a human
-    "cost_matrix": None,        # {answer: {true answer: cost}} for mistakes that cost differently
 }
+# When to answer and when to escalate (abstain_threshold, risk_budget, costs …) is the
+# decision policy (core/policy.py), versioned separately from the model state.
 
 
 class SpecError(ValueError):
@@ -139,7 +135,9 @@ class DecisionTask:
 
     def __init__(self, spec: QuestionSpec, settings: dict | None = None) -> None:
         self.spec = spec
-        self.settings = {**DEFAULT_SETTINGS, **(settings or {})}
+        settings = settings or {}
+        self.settings = {**DEFAULT_SETTINGS, **{k: v for k, v in settings.items() if k not in POLICY_KEYS}}
+        self.policy = DecisionPolicy.from_settings(settings)
         self.featurizer = Featurizer()
         self.prior = PriorExpert()
         self.linear = LinearExpert()
@@ -168,6 +166,10 @@ class DecisionTask:
     def __setstate__(self, state: dict) -> None:
         self.__dict__.update(state)
         self.__dict__.setdefault("_neural", None)
+        if "policy" not in state:  # saved before the policy had its own object: move its settings over
+            old = self.settings
+            self.policy = DecisionPolicy.from_settings({k: v for k, v in old.items() if k in POLICY_KEYS and v is not None})
+            self.settings = {k: v for k, v in old.items() if k not in POLICY_KEYS}
 
     def attach_neural(self, fn: Callable[..., tuple[Dist, float] | None] | None, share: float = 0.3,
                       pretrained: bool = False) -> None:
@@ -248,7 +250,7 @@ class DecisionTask:
         checked against (the patch layer passes its own)."""
         probs = internal["probabilities"]
         _, conf = confidence_of(probs)
-        decision = contract.decide(probs, {**DEFAULT_SETTINGS, **self.settings}, metrics or self.metrics, abstain_threshold)
+        decision = self.policy.decide(probs, metrics or self.metrics, abstain_threshold)
         best = decision["answer"]  # the cheapest answer under a cost matrix, otherwise the most probable
         knows = bool(internal["weights"])
         out: dict[str, Any] = {"type": self.spec.type}
@@ -266,7 +268,7 @@ class DecisionTask:
         # Most of the evidence is new to the student: whatever the (shrunk) confidence says,
         # this is a question for the teacher or a human.
         out["abstain"] = (not knows) or decision["abstain"] or bool(internal.get("unfamiliar"))
-        out["decision"] = {k: decision[k] for k in ("rule", "threshold", "expected_cost", "propensity")}
+        out["decision"] = {k: decision[k] for k in ("rule", "threshold", "expected_cost", "propensity", "policy_version")}
         return out
 
     def explain(self, internal: dict) -> dict:
@@ -364,7 +366,8 @@ class DecisionTask:
             "type": self.spec.type,
             "instructions": self.spec.instructions,
             "options": self.spec.options,
-            "settings": self.settings,
+            "settings": {**self.settings, **self.policy.settings()},
+            "policy": {"version": self.policy.version, "updated_at": self.policy.updated_at},
             "labels": self.labels,
             "labels_by_source": self.labels_by_source,
             "version": self.version,

@@ -105,8 +105,9 @@ class SourceTrust:
     compromised account is caught from its recent behaviour.
     """
 
-    def __init__(self, halflife: float = 300.0, prior: float = 10.0, power: float = 1.0) -> None:
+    def __init__(self, halflife: float = 300.0, prior: float = 10.0, power: float = 1.0, tolerance: float = 1.0) -> None:
         self.halflife = halflife
+        self.tolerance = tolerance  # disagreeing up to this many times the median is not penalised
         self.prior = prior  # pseudo-observations at the median: a new annotator is trusted like the median
         self.power = power
         self.stats: dict[str, list[float]] = {}  # annotator -> [agree, disagree, t_ref]
@@ -180,7 +181,7 @@ class SourceTrust:
         med = max(self.median(now), 0.02)  # floor: near-perfect agreement must not make every slip fatal
         st = self._fade(a, now)
         dis = (st[1] + self.prior * med) / (st[0] + st[1] + self.prior)
-        return min(med / dis, 1.0) ** self.power if dis > 0 else 1.0
+        return min(getattr(self, "tolerance", 1.0) * med / dis, 1.0) ** self.power if dis > 0 else 1.0
 
     def report(self, now: int) -> dict:
         return {a: {"agreement": None if self._rate(a, now) is None else round(1 - self._rate(a, now), 3),
@@ -354,7 +355,7 @@ class PatchedTask:
                  gate_sources: tuple[str, ...] = ("human", "dataset", "teacher"), gate_prior: float = 0.5,
                  retire_below: float = 0.0, rehearse_min_support: float = 0.0, rehearse_if_base_agrees: float = 0.5,
                  consolidate_damping: float = 0.0, source_trust: bool = False, source_halflife: float = 300.0,
-                 source_power: float = 1.0, seed: int = 0, **store: Any) -> None:
+                 source_power: float = 1.0, source_tolerance: float = 1.0, seed: int = 0, **store: Any) -> None:
         self.base = base
         # Probation is ``probation_share`` of the labels seen, between ``min_probation`` and
         # ``probation``: a small question still trains its experts early (undoing an old label
@@ -379,7 +380,7 @@ class PatchedTask:
         # weight, so a burst of wrong labels spreads less when it leaves probation (0 = off)
         self.consolidate_damping = consolidate_damping
         # K1: weigh labels by how well their annotator agrees with the other annotators
-        self.sources = SourceTrust(source_halflife, power=source_power) if source_trust else None
+        self.sources = SourceTrust(source_halflife, power=source_power, tolerance=source_tolerance) if source_trust else None
         self.calibrator = TemperatureCalibrator()
         self.calib_log: deque = deque(maxlen=self.calibrator.samples.maxlen)  # (entry id, raw, label)
         # What users see is the patched task: it takes over the served-quality metrics, the

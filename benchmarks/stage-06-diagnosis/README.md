@@ -65,3 +65,44 @@ Son 1.500 kararda modelin kendi verdiği cevaplar:
 Bu yüzden Stage 05'teki kapı ve güven ayarları işe yaramadı: yanlış parçayı değiştiriyorlardı.
 
 Sıradaki deney: tekrar çalışma kapalıyken tüm senaryolar. Soru şu: sıralı akıştaki kazanç tekrar çalışmadan mı geliyor, yoksa patch'lerden mi?
+
+## Teşhisi sınayan deneyler (tohum 0)
+
+| Tekrar çalışma | Karışık doğruluk | Yanlışı tekrarlama | Drift sonda | Sıralı | Öğretmen: test doğruluğu |
+|---|---|---|---|---|---|
+| Düz temel model (patch yok) | %88,5 | %5,6 | %67,3 | %12,5 | %74,6 |
+| Hepsi (Stage 04) | %89,2 | %20,6 | %65,8 | %80,1 | %73,3 |
+| Kapalı | %88,1 | %9,0 | %67,3 | %79,3 | %73,4 |
+| Yalnızca doğrulanmış kayıtlar | %88,3 | %7,3 | %65,3 | %79,9 | %72,0 |
+| **Kalıcı model ≥ %50 olası buluyorsa** | **%89,1** | **%7,1** | %65,8 | %79,8 | %70,7 |
+| Kalıcı model ≥ %20 olası buluyorsa | %89,0 | %9,9 | %66,0 | %80,1 | %70,9 |
+
+Ham çıktılar: `logs/no_rehearsal_seed0.txt`, `logs/rehearse_confirmed_seed0.txt`, `logs/rehearse_if_base_agrees_seed0.txt`.
+
+- Tekrar çalışmayı kapatmak teşhisi doğruluyor: yanlış tekrarlama %20,6'dan %9'a iniyor, drift temel model seviyesine geliyor. Ama karışık akıştaki ~1 puanlık kazanç kayboluyor. O kazanç da tekrar çalışmadan geliyormuş.
+- **"Kalıcı model bu cevabı en az %50 olası buluyorsa tekrar çalış"** ikisini birden sağlıyor: yanlış ya da eski etiket, kalıcı modelin geri kalan bilgisiyle çeliştiği için tekrar çalışılmıyor; doğru kayıtlar pekişmeye devam ediyor.
+
+## Seçilen ayarın tam ölçümü (3 tohum)
+
+Commit `07a8bd2`, `results_patch_agree.json`:
+
+| Metrik | Temel model | Stage 04 | **Stage 06 (yeni varsayılan)** |
+|---|---|---|---|
+| Karışık doğruluk | %88,75 | %89,31 | %89,02 ± 0,23 |
+| Karışık, biriken hata (kümülatif log loss) | 0,878 | 0,870 | 0,889 |
+| Sıralı doğruluk / forgetting | %13,7 / 0,63 | %80,2 / 0,098 | %80,0 / 0,100 |
+| Yanlışı tekrarlama, %1 gürültü | %6,4 | %24,2 | **%11,2 ± 4,2** |
+| Yanlışı tekrarlama, %5 gürültü | %6,9 | %21,4 | **%11,2 ± 4,4** |
+| Patlama: diğer sınıflara hasar | 3,8 puan | 0,35 puan | 0,58 puan |
+| Geri alma süresi | 29,6 sn | 0,12 sn | 0,16 sn |
+| Drift yarı ömrü / değişen sınıflar sonda | 3.000 / %64,8 | 3.500 / %61,5 | 3.417 / %61,3 |
+| Öğretmen: test doğruluğu / AURC | %73,6 / 0,090 | %71,2 / 0,115 | %70,8 / 0,120 |
+
+**Sonuç**
+
+- **Yanlışı tekrarlama yarıya indi** (%21–24 → %11). Temel modelin seviyesine (%6–7) ise tam inmedi: tohum 0'da %7'ydi, diğer iki tohumda daha yüksek.
+- **Bedeli küçük:** karışık akışta −0,3 puan (yine de temel modelden iyi). Biriken hata da temel modelden biraz kötü.
+- **Drift ve öğretmenli senaryo değişmedi.** Teşhisin gösterdiği üzere tekrar çalışma bunların sebeplerinden yalnızca biri:
+  - **Drift:** asıl yavaşlık deneme süresi gecikmesinden ve patch'lerin eski/yeni anlam arasında bölünmesinden geliyor.
+  - **Öğretmen:** model daha az soru sorduğu için daha az öğretmen etiketi topluyor. Bu bir kapsam–risk dengesi ve risk bütçesiyle (Faz 1) ayarlanmalı.
+- Bu ayar varsayılan olarak kalıyor.

@@ -190,12 +190,12 @@ Doğruluk tek başına yetmiyor: model akış boyunca nasıl öğreniyor, hatal�
 
 | | Temel model | Patch katmanı |
 |---|---|---|
-| Karışık akış | %88,75 | %89,31 |
-| Sıralı akış (forgetting index) | %13,7 (0,63) | **%80,2 (0,10)** |
-| 30 hatalı etiket: diğer sınıflara hasar | 3,8 puan | **0,35 puan** |
-| Bu etiketleri geri alma | 29,6 sn, 5.001 olay yeniden oynatılır | **0,12 sn, 0 olay** |
-| Drift yarı ömrü | 3.000 etiket | 3.500 etiket (kötü) |
-| Aynı mesajda yanlış etiketi tekrarlama | %7 | ~%23 (kötü) |
+| Karışık akış | %88,75 | %89,02 |
+| Sıralı akış (forgetting index) | %13,7 (0,63) | **%80,0 (0,10)** |
+| 30 hatalı etiket: diğer sınıflara hasar | 3,8 puan | **0,6 puan** |
+| Bu etiketleri geri alma | 29,6 sn, 5.001 olay yeniden oynatılır | **0,16 sn, 0 olay** |
+| Drift yarı ömrü | 3.000 etiket | 3.417 etiket (kötü) |
+| Aynı mesajda yanlış etiketi tekrarlama | %7 | %11 (kötü; [aşama 06](benchmarks/stage-06-diagnosis/) öncesi %23) |
 
 Tüm aşamaların ölçümleri, ham loglar ve JSON sonuçları: [`benchmarks/`](benchmarks/).
 

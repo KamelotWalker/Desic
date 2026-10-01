@@ -22,7 +22,7 @@ def answers(t, states):
 
 
 def test_learns_immediately_before_the_base_does():
-    t = task(probation=1000)
+    t = task(probation=1000, min_probation=1000)
     for s, y in rows(200):
         t.learn(s, y, source="dataset")
     assert t.base.labels == 0 and len(t.pending) == 200  # nothing consolidated yet
@@ -33,7 +33,7 @@ def test_learns_immediately_before_the_base_does():
 
 def test_retracting_patches_on_probation_is_exact():
     data, probe = rows(300), [s for s, _ in rows(40, seed=2)]
-    t = task(probation=1000)
+    t = task(probation=1000, min_probation=1000)
     for s, y in data:
         t.learn(s, y, source="dataset")
     before = answers(t, probe)
@@ -42,6 +42,7 @@ def test_retracting_patches_on_probation_is_exact():
         t.learn(s, "sales", source="human", ref=f"bad-{i}")
     assert answers(t, probe) != before
     stats = t.retract(f"bad-{i}" for i in range(15))
+    assert stats.pop("seconds") < 1.0
     assert stats == {"retracted": 15, "on_probation": 15, "consolidated": 0, "replayed": 0}
     after = answers(t, probe)
     assert all(abs(a[o] - b[o]) < 1e-9 for a, b in zip(after, before) for o in a)
@@ -69,7 +70,7 @@ def test_retracting_consolidated_labels_matches_never_having_seen_them():
 
 
 def test_a_contradicted_patch_loses_trust():
-    t = task(probation=1000)
+    t = task(probation=1000, min_probation=1000)
     t.learn("refund my double charge please", "sales", source="human")
     p = next(iter(t.store.entries.values()))
     for _ in range(3):
@@ -78,7 +79,7 @@ def test_a_contradicted_patch_loses_trust():
 
 
 def test_memory_is_class_balanced():
-    t = task(probation=0, capacity=60)
+    t = task(probation=0, min_probation=0, capacity=60)
     for s, y in rows(300):
         t.learn(s, y, source="dataset")
     sizes = sorted(len(v) for v in t.store.by_label.values())
@@ -86,7 +87,7 @@ def test_memory_is_class_balanced():
 
 
 def test_survives_pickling_and_reports_patch_weight():
-    t = task(probation=5)
+    t = task(probation=5, min_probation=5)
     for s, y in rows(50):
         t.learn(s, y, source="dataset")
     t2 = pickle.loads(pickle.dumps(t))

@@ -225,14 +225,17 @@ class Storage:
         )
         return int(cur.lastrowid)
 
-    def add_events(self, rows: list[tuple]) -> None:
+    def add_events(self, rows: list[tuple]) -> list[int]:
         now = time.time()
+        ids = []
         with self.lock:
-            self.conn.executemany(
-                "INSERT INTO feedback_events(created_at, task, decision_id, state, label, source, weight) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                [(now, task, did, _dumps(state), _dumps(label), source, weight) for task, did, state, label, source, weight in rows],
-            )
+            for task, did, state, label, source, weight in rows:
+                cur = self.conn.execute(
+                    "INSERT INTO feedback_events(created_at, task, decision_id, state, label, source, weight) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (now, task, did, _dumps(state), _dumps(label), source, weight))
+                ids.append(int(cur.lastrowid))
             self.conn.commit()
+        return ids
 
     @staticmethod
     def _event(r: sqlite3.Row) -> dict:

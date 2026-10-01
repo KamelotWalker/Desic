@@ -1,0 +1,2 @@
+sorted 0 {'accuracy': 0.1273, 'nll': 3.2069, 'ece': 0.5219, 'forgetting_index': 0.6518, 'cum_log_loss': 0.3596}
+shuffled 0 {'accuracy': 0.8851, 'nll': 0.4156, 'ece': 0.0103, 'risk@80%': 0.0321, 'aurc': 0.0185}

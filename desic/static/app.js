@@ -419,6 +419,10 @@ function explanationView(e) {
     parts.push(h('div', { class: 'small muted' }, e.memory.exact_match ? 'memory: this exact state was labelled before'
       : `memory: ${(e.memory.neighbours || []).map(n => `${n.answer} (sim ${dec(n.similarity, 2)})`).join(', ')}`));
   }
+  if (e.patches && e.patches.length) {
+    parts.push(h('div', { class: 'small muted' }, 'patches: ', e.patches.map((p, i) => [i ? ', ' : '',
+      `${p.answer} (sim ${dec(p.similarity, 2)}, trust ${pct(p.trust)}${p.on_probation ? ', on probation' : ''})`])));
+  }
   if (e.neural && e.neural.act != null) {
     parts.push(h('div', { class: 'small muted' }, `neural act/escalate head: P(its top answer is right) = ${pct(e.neural.act)}`));
   }
@@ -588,8 +592,19 @@ function renderLive(q) {
     barRows(used.map(([n, v]) => [n, v / usedTotal]), pct, 1),
     idle.length ? h('div', { class: 'small muted' }, `not used: ${idle.join(', ')}${idle.includes('tree') ? ' (the states have no structured fields)' : ''}`) : null,
     h('p', { class: 'small muted', style: { marginTop: '8px' } },
-      `${q.neural_attached ? 'neural = Laya-style encoder (see the Neural page) · ' : ''}prior = base rates · linear = text/JSON evidence (${num(q.vocabulary)} features) · tree = thresholds on fields (${num(q.tree.nodes)} nodes) · memory = ${num(q.memory_size)} remembered examples, reacts instantly to corrections`))
+      `${q.neural_attached ? 'neural = Laya-style encoder (see the Neural page) · ' : ''}prior = base rates · linear = text/JSON evidence (${num(q.vocabulary)} features) · tree = thresholds on fields (${num(q.tree.nodes)} nodes) · memory = ${num(q.memory_size)} remembered examples`),
+    patchesNote(q.patches))
     : h('div', { class: 'empty' }, 'No experts yet.'));
+}
+
+function patchesNote(p) {
+  if (!p) return null;
+  const gate = Object.values(p.gate || {});
+  const avg = gate.length ? gate.reduce((a, b) => a + b, 0) / gate.length : null;
+  return h('p', { class: 'small', style: { marginTop: '6px' } }, h('strong', {}, 'Patch layer: '),
+    `${num(p.entries)} patches — ${num(p.on_probation)} on probation (reversible at once), ${num(p.consolidated)} consolidated into the experts above. `,
+    'New labels act at once, but only on similar inputs; the experts learn them after ', num(p.probation), ' more labels.',
+    avg != null ? ` Learned trust in patches: ${pct(avg)} on average across ${num(gate.length)} contexts.` : '');
 }
 
 // ------------------------------------------------------------------ charts
@@ -830,8 +845,25 @@ async function tabLog(q) {
   });
   const topLabel = l => (typeof l === 'string' ? l : Object.entries(l).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${pct(v)}`).slice(0, 2).join(', '));
   const counts = Object.entries(q.log || {}).map(([k, v]) => `${k}: ${num(v)}`).join(' · ');
+  const undoText = u => !u ? '' : u.restored ? 'learned again' :
+    `undone in ${u.seconds < 1 ? `${Math.max(1, Math.round(u.seconds * 1000))} ms` : `${dec(u.seconds, 1)} s`}` +
+    (u.replayed ? ` (${num(u.replayed)} later labels replayed from a checkpoint)` : ' (still on probation: dropped exactly)');
+  const lastN = h('input', { type: 'number', min: 1, max: 1000, value: 10, style: { width: '72px' } });
+  const lastSource = h('select', {}, h('option', { value: '' }, 'any source'), ['human', 'teacher', 'dataset', 'system'].map(v => h('option', { value: v }, v)));
+  const undoLast = h('button', {}, 'Undo last');
+  undoLast.onclick = () => guard(undoLast, async () => {
+    const n = Math.max(1, Math.min(1000, parseInt(lastN.value, 10) || 1));
+    if (!confirm(`Retract the ${n} most recent ${lastSource.value || ''} labels of ${q.name}?`)) return;
+    const r = await api('POST', `/v1/questions/${enc(q.name)}/retract-recent`, { n, sources: lastSource.value ? [lastSource.value] : null });
+    toast(`${num(r.events.length)} labels retracted — ${undoText(r.undo)}${r.hint ? '. ' + r.hint : ''}`, r.hint ? 'warn' : 'good');
+    renderTab();
+  });
+  const p = q.patches || {};
   return h('div', {},
-    h('p', { class: 'small muted' }, 'Every label the student learned from, append-only. Retract a bad label, then rebuild to remove its influence. ', counts),
+    h('p', { class: 'small muted' }, 'Every label the student learned from, append-only. Retracting a label undoes it at once: ',
+      `the last ${num(p.probation || 0)} labels are still on probation and are simply dropped; older ones are replayed out from the nearest checkpoint. `,
+      'Rebuild replays the whole log into a fresh student. ', counts),
+    h('div', { class: 'row', style: { marginBottom: '10px' } }, undoLast, lastN, 'labels from', lastSource),
     h('div', { class: 'row', style: { marginBottom: '10px' } }, rebuild, h('label', { class: 'check small' }, excludeTeacher, 'skip teacher labels'), jobSlot),
     events.length ? h('div', { class: 'table-wrap' }, h('table', {},
       h('thead', {}, h('tr', {}, h('th', {}, '#'), h('th', {}, 'When'), h('th', {}, 'Source'), h('th', {}, 'Label'), h('th', {}, 'State'), h('th', {}))),
@@ -840,7 +872,9 @@ async function tabLog(q) {
         h('td', {}, h('span', { class: `badge ${e.source === 'teacher' ? 'warn' : e.source === 'human' ? 'accent' : ''}` }, e.source)),
         h('td', {}, topLabel(e.label)), h('td', { class: 'small', title: stateText(e.state) }, clip(e.state, 90)),
         h('td', {}, h('button', { class: 'sm', onclick: ev => guard(ev.currentTarget, async () => {
-          await api('POST', `/v1/feedback/${e.id}/${e.retracted ? 'restore' : 'retract'}`); renderTab();
+          const r = await api('POST', `/v1/feedback/${e.id}/${e.retracted ? 'restore' : 'retract'}`);
+          toast(r.applied ? `#${e.id} ${undoText(r.undo)}` : (r.hint || 'nothing to do'), r.applied ? 'good' : 'warn');
+          renderTab();
         }) }, e.retracted ? 'Restore' : 'Retract')))))))
       : h('div', { class: 'empty' }, 'The log is empty.'));
 }

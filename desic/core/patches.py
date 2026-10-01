@@ -21,8 +21,9 @@ replay the whole log.
   answer keeps a burst of wrong labels from teaching the gate to trust patches
   for every other answer too. A temperature on top keeps the combined answer
   calibrated.
-* **Probation.** An entry reaches the base once ``probation`` further
-  events. Until then retracting it is exact and O(1): the base never saw it.
+* **Probation.** An entry reaches the base once ``probation`` further labels
+  have arrived (10% of the labels seen, 20–500). Until then retracting it is
+  exact and O(1): the base never saw it.
 * **Consolidation.** When an entry is consolidated the base learns it, together
   with ``replay`` class-balanced rehearsals of older, trusted entries, so a
   stream that arrives one class at a time does not wipe out the earlier ones.
@@ -41,14 +42,15 @@ from __future__ import annotations
 import math
 import pickle
 import random
+import time
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
-from .calibration import TemperatureCalibrator, confidence_of
+from .calibration import TaskMetrics, TemperatureCalibrator, confidence_of
 from .experts import Dist, cross_entropy, normalize, smooth
 from .features import Features, state_hash
-from .task import FAMILIAR, DecisionTask, SpecError
+from .task import FAMILIAR, GROUND_TRUTH_SOURCES, SCORE, DecisionTask, SpecError
 
 
 @dataclass
@@ -224,11 +226,17 @@ class Gate:
 class PatchedTask:
     """A :class:`DecisionTask` behind a reversible patch layer (same answer / public / learn interface)."""
 
-    def __init__(self, base: DecisionTask, probation: int = 500, replay: int = 1, checkpoint_every: int = 1000,
+    def __init__(self, base: DecisionTask, probation: int = 500, probation_share: float = 0.1, min_probation: int = 20,
+                 replay: int = 1, checkpoint_every: int = 1000,
                  keep_checkpoints: int = 4, trust_sim: float = 0.5, gate_by_answer: bool = True, seed: int = 0,
                  **store: Any) -> None:
         self.base = base
-        self.probation = probation
+        # Probation is ``probation_share`` of the labels seen, between ``min_probation`` and
+        # ``probation``: a small question still trains its experts early (undoing an old label
+        # replays only a few hundred events anyway), a large one keeps a long reversible window.
+        self.max_probation = probation
+        self.probation_share = probation_share
+        self.min_probation = min_probation
         self.replay = replay
         self.checkpoint_every = checkpoint_every
         self.keep_checkpoints = keep_checkpoints
@@ -238,9 +246,15 @@ class PatchedTask:
         self.gate = Gate()
         self.calibrator = TemperatureCalibrator()
         self.calib_log: deque = deque(maxlen=self.calibrator.samples.maxlen)  # (entry id, raw, label)
+        # What users see is the patched task: it takes over the served-quality metrics, the
+        # label counts and the version (a task wrapped after training keeps its history); the
+        # base keeps private ones for what it learns at consolidation.
+        self.metrics, base.metrics = base.metrics, TaskMetrics()
+        self.labels_by_source = dict(base.labels_by_source)
+        self.version = base.version
         self.pending: deque[Patch] = deque()
         self.log: list[Patch] = []  # consolidated entries, in consolidation order
-        self.checkpoints: list[tuple[int, bytes]] = [(0, pickle.dumps(base))]
+        self.checkpoints: list[tuple[int, bytes]] = [(0, pickle.dumps(base))]  # the base as it was wrapped
         self.refs: dict[str, int] = {}
         self.rng = random.Random(seed)
         self.t = 0
@@ -259,6 +273,29 @@ class PatchedTask:
     @property
     def events(self) -> list[dict]:
         return self.base.events
+
+    @property
+    def rules(self) -> list[dict]:
+        return self.base.rules
+
+    @rules.setter
+    def rules(self, value: list[dict]) -> None:
+        self.base.rules = value
+
+    @property
+    def labels(self) -> int:
+        return sum(self.labels_by_source.values())
+
+    def __getattr__(self, name: str) -> Any:
+        # everything else (attach_neural, mixture, featurizer, created_at, …) is the base's
+        if name.startswith("__") or "base" not in self.__dict__:
+            raise AttributeError(name)
+        return getattr(self.base, name)
+
+    @property
+    def probation(self) -> int:
+        """How many of the latest labels are still on probation (reversible in O(1))."""
+        return max(self.min_probation, min(self.max_probation, int(self.probation_share * self.t)))
 
     def public(self, internal: dict, abstain_threshold: float | None = None) -> dict:
         return self.base.public(internal, abstain_threshold)
@@ -281,10 +318,9 @@ class PatchedTask:
             f["raw"], f["wp"] = {o: wb * pb.get(o, 0.0) + wp * pq.get(o, 0.0) for o in opts}, wp
         return f
 
-    def answer(self, state: Any, options: list[str] | None = None) -> dict:
-        f = self._forecasts(state, options)
+    def _serve(self, f: dict) -> tuple[Dist, float, bool]:
+        """Calibrate the combined forecast and shrink it toward "don't know" when the input is unfamiliar."""
         a, opts = f["a"], f["a"]["options"]
-        self._last = (a["key"], self.t, f)
         probs = self.calibrator.apply(f["raw"])
         familiarity = a["familiarity"]
         if f["pq"] is not None:  # a close labelled neighbour makes the input familiar before the base learns it
@@ -293,13 +329,35 @@ class PatchedTask:
         if unfamiliar:
             lam = familiarity / FAMILIAR
             probs = {o: lam * p + (1 - lam) / len(opts) for o, p in probs.items()}
+        return probs, familiarity, unfamiliar
+
+    def answer(self, state: Any, options: list[str] | None = None) -> dict:
+        f = self._forecasts(state, options)
+        a = f["a"]
+        self._last = (a["key"], self.t, f)
+        probs, familiarity, unfamiliar = self._serve(f)
         weights = {k: v * (1 - f["wp"]) for k, v in a["weights"].items()}
         if f["pq"] is not None:
             weights["patch"] = f["wp"]
         return {**a, "raw": f["raw"], "probabilities": probs, "weights": weights, "familiarity": familiarity,
-                "unfamiliar": unfamiliar,
+                "unfamiliar": unfamiliar, "patch_dist": f["pq"],
                 "patch": {"cell": f["cell"], "strength": round(f["strength"], 4), "weight": round(f["wp"], 4)}
                 if f["pq"] is not None else None}
+
+    def explain(self, internal: dict) -> dict:
+        out = self.base.explain(internal)
+        out["familiarity"] = round(internal.get("familiarity", 1.0), 3)
+        out["temperature"] = self.calibrator.t
+        pq = internal.get("patch_dist")
+        if pq is not None:
+            top, tp = confidence_of(pq)
+            out["experts"]["patch"] = {"awake": True, "weight": round(internal["weights"].get("patch", 0.0), 4),
+                                       "answer": top, "p": round(tp, 4)}
+            near = self.store.query(_vec(internal["feats"]), internal["key"])
+            out["patches"] = [{"similarity": round(s, 3), "answer": p.label, "source": p.source, "ref": p.ref,
+                               "trust": round(p.trust(self.store.trust_prior), 3), "on_probation": not p.consolidated}
+                              for s, p in near[:5]]
+        return out
 
     # ----------------------------------------------------------------- learn
     def learn(self, state: Any, target: str | Dist, source: str = "human", weight: float | None = None,
@@ -330,9 +388,14 @@ class PatchedTask:
         # prequential: which forecaster would have been right, and was the combined answer calibrated?
         if f["pq"] is not None:
             self.gate.update(p.id, f["cell"], cross_entropy(dist, f["pb"]), cross_entropy(dist, f["pq"]), weight)
-        if source in ("human", "dataset") and len(dist) == 1:
+        if source in GROUND_TRUTH_SOURCES and len(dist) == 1:
+            if served is None:  # test-then-train: score what answer() would have served
+                served = self._serve(f)[0]
+            self.metrics.update(served, p.label, abstained, spec.option_names if spec.type == SCORE else None)
             self.calibrator.add(f["raw"], p.label)
             self.calib_log.append((p.id, f["raw"], p.label))
+        self.labels_by_source[source] = self.labels_by_source.get(source, 0) + 1
+        self.version += 1
         # this label supports or contradicts the close patches it lands next to
         for s, nb in f["near"]:
             if s < self.trust_sim or nb.id == p.id:
@@ -365,7 +428,7 @@ class PatchedTask:
         self.log.append(p)
         if len(self.log) % self.checkpoint_every == 0:
             self.checkpoints.append((len(self.log), pickle.dumps(self.base)))
-            if len(self.checkpoints) > self.keep_checkpoints + 1:  # the empty base is always kept
+            if len(self.checkpoints) > self.keep_checkpoints + 1:  # the base as wrapped is always kept
                 del self.checkpoints[1]
         return events
 
@@ -394,6 +457,7 @@ class PatchedTask:
         calibration is undone; entries still on probation are simply dropped, and
         consolidated ones are removed from the base by restoring the nearest
         earlier checkpoint and replaying the consolidated log after it without them."""
+        t0 = time.perf_counter()
         ids = {self.refs.pop(r) for r in refs if r in self.refs}
         ids &= set(self.store.entries)
         pend = {i for i in ids if not self.store.entries[i].consolidated}
@@ -434,11 +498,15 @@ class PatchedTask:
         for i in pend:
             self.store.remove(i)
         self._last = None
-        return {"retracted": len(ids), "on_probation": len(pend), "consolidated": len(cons), "replayed": replayed}
+        if ids:
+            self.version += 1
+        return {"retracted": len(ids), "on_probation": len(pend), "consolidated": len(cons), "replayed": replayed,
+                "seconds": round(time.perf_counter() - t0, 4)}
 
     def summary(self) -> dict:
         out = self.base.summary()
-        out["patches"] = {"entries": len(self.store), "on_probation": len(self.pending), "consolidated": len(self.log),
+        out.update(labels=self.labels, labels_by_source=self.labels_by_source, version=self.version)
+        out["patches"] = {"probation": self.probation, "entries": len(self.store), "on_probation": len(self.pending), "consolidated": len(self.log),
                           "checkpoints": [c[0] for c in self.checkpoints], "temperature": self.calibrator.t,
                           "gate": {c: round(self.gate.weights(c)[1], 3) for c in sorted(self.gate.logw)}}
         return out

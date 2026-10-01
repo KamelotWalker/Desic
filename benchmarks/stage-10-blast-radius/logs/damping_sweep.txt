@@ -1,0 +1,12 @@
+damp0.2 burst 0 {'victim_after': 0.6, 'others_harm_at_0': 0.0, 'others_harm_at_600': -0.0043, 'others_harm_at_1000': 0.0003}
+damp0.5 burst 0 {'victim_after': 0.7, 'others_harm_at_0': -0.0007, 'others_harm_at_600': -0.0033, 'others_harm_at_1000': 0.0026}
+damp0.2 burst 1 {'victim_after': 0.475, 'others_harm_at_0': 0.0056, 'others_harm_at_600': 0.0007, 'others_harm_at_1000': 0.0039}
+damp0.5 burst 1 {'victim_after': 0.525, 'others_harm_at_0': 0.0004, 'others_harm_at_600': -0.0023, 'others_harm_at_1000': 0.0046}
+damp0.2 burst 2 {'victim_after': 0.7, 'others_harm_at_0': -0.001, 'others_harm_at_600': 0.0009, 'others_harm_at_1000': 0.0027}
+damp0.5 burst 2 {'victim_after': 0.725, 'others_harm_at_0': 0.0007, 'others_harm_at_600': 0.0003, 'others_harm_at_1000': 0.001}
+damp0.2 drift 0 {'adaptation_half_life': 4000, 'moved_final': 0.5}
+damp0.5 drift 0 {'adaptation_half_life': 4000, 'moved_final': 0.5}
+damp0.2 shuffled 0 {'accuracy': 0.8636, 'ece': 0.0154}
+damp0.5 shuffled 0 {'accuracy': 0.8529, 'ece': 0.0191}
+damp0.2 sorted 0 {'accuracy': 0.8006, 'ece': 0.2499, 'forgetting_index': 0.0936}
+damp0.5 sorted 0 {'accuracy': 0.8019, 'ece': 0.2499, 'forgetting_index': 0.0918}

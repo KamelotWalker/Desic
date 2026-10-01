@@ -15,6 +15,7 @@ Her geliştirme aşamasının ölçümleri burada **ayrı bir klasörde** ve de�
 | 07 | [`stage-07-decision-contract`](stage-07-decision-contract/) | Faz 1: maliyetler, maliyet matrisi, risk bütçesi; karar kaydı | Bütçe tutuluyor (%2/%5/%10 → %1,4/%4,0/%8,5 hata, kapsam en iyi olasının %86–96'sı); seyrek geri bildirimde aşırı temkinli (öğretmenli senaryoda %93 soruyor, ama test doğruluğu %74,5) |
 | 08 | [`stage-08-expected-risk-budget`](stage-08-expected-risk-budget/) | "Beklenen" bütçe modu: kalibre güven + etiketlerle düzeltme (prediction-powered) | Bol geri bildirimde en iyi olası kapsamın %98–100'ü, hata ortalamada bütçede; öğretmenli senaryoda patch'li öğrenci %95 doğru cevaplıyor, öğretmene %71 (garantili %93), test %74,4 (bütçesiz %70,8) |
 | 09 | [`stage-09-supersede-rejected`](stage-09-supersede-rejected/) | Drift için çürütülmüş patch'leri oydan çıkarmak (tek tohum) | **Reddedildi:** drift birebir aynı; sınırlayan kalıcı modelin hızı ve deneme süresi gecikmesi |
+| 10 | [`stage-10-blast-radius`](stage-10-blast-radius/) | B1: patlamanın diğer sınıflara hasarı, pekiştirme sonrası, hiç saldırı görmemiş ikize karşı; sönümleme denemesi | Patch: 0,5 → 1,0 → 0,1 puan (temel: 3,8 → 0,1 → 0); sönümleme hasarı sıfırlıyor ama drift %65,8 → %50, karışık −3 puan: **reddedildi** |
 
 ## Her aşama klasöründe
 

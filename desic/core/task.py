@@ -40,6 +40,7 @@ DEFAULT_SETTINGS = {
     "teacher_weight": 0.5,      # how much a teacher label counts vs a human label (1.0)
     # decision contract (see core/contract.py); None = not used
     "risk_budget": None,        # at most this share of answered decisions may be wrong
+    "risk_budget_mode": "guaranteed",  # guaranteed (labels prove it) | expected (calibration-based)
     "cost_wrong": None,         # cost of a wrong answer …
     "cost_abstain": None,       # … vs the cost of escalating to the teacher / a human
     "cost_matrix": None,        # {answer: {true answer: cost}} for mistakes that cost differently

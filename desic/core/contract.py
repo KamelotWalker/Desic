@@ -11,9 +11,19 @@ more than one is set, the strictest wins:
   than rejecting a good one) the answer itself is the one with the lowest
   expected cost, which need not be the most probable one.
 * **risk budget** – keep the error rate among *answered* decisions at or below
-  ``risk_budget``: the lowest confidence threshold whose error rate on recent
-  labelled decisions still fits the budget with 90% confidence (Wilson upper
-  bound). Until enough labelled decisions exist the other rules decide.
+  ``risk_budget``, with the lowest confidence threshold that does. Two modes
+  (``risk_budget_mode``):
+
+  - ``guaranteed`` (default): the error rate of recent *labelled* decisions above
+    the threshold must fit the budget with 90% confidence (Wilson upper bound).
+    Safe, but with few labels it cannot prove much and escalates a lot.
+  - ``expected``: a prediction-powered estimate (Angelopoulos et al., 2023). The
+    student's own calibrated confidences on *all* recent decisions predict the
+    error rate; the labelled ones correct that prediction's bias. Answers far
+    more when labels are scarce; the budget then holds on average, not with a
+    margin.
+
+  Until enough decisions exist the other rules decide.
 
 Inputs that are mostly new to the student are always escalated, whatever the
 rules say. Every decision records what decided it (rule, threshold, expected
@@ -65,15 +75,45 @@ def budget_threshold(records: list[tuple[float, bool]], budget: float) -> float 
     return best if best is not None else 1.01
 
 
-def _budget_tau(metrics: Any, budget: float) -> float | None:
+def expected_threshold(records: list[tuple[float, bool]], served: list[float], budget: float) -> float | None:
+    """Lowest threshold τ whose *estimated* error rate among answered decisions fits ``budget``.
+
+    Prediction-powered estimate: mean(1 − confidence) over the recent decisions with
+    confidence ≥ τ (labelled or not), plus the mean of (error − (1 − confidence)) over
+    the labelled ones with confidence ≥ τ — the calibration bias, once there are at least
+    ``MIN_SUPPORT`` of them. ``None`` = too few decisions yet; above 1 = nothing fits.
+    """
+    if len(served) < MIN_LABELS:
+        return None
+    s_sorted = sorted(served, reverse=True)
+    l_sorted = sorted(records, key=lambda r: -r[0])
+    best, j, sum_u, sum_r = None, 0, 0.0, 0.0
+    for i, c in enumerate(s_sorted, 1):
+        sum_u += 1.0 - c
+        if i < len(s_sorted) and s_sorted[i] == c:
+            continue  # judge a whole group of equal confidences at once
+        while j < len(l_sorted) and l_sorted[j][0] >= c:
+            lc, ok = l_sorted[j]
+            sum_r += (0.0 if ok else 1.0) - (1.0 - lc)
+            j += 1
+        risk = sum_u / i + (sum_r / j if j >= MIN_SUPPORT else 0.0)
+        if i >= MIN_SUPPORT and risk <= budget:
+            best = c
+    return best if best is not None else 1.01
+
+
+def _budget_tau(metrics: Any, budget: float, mode: str = "guaranteed") -> float | None:
     cache = getattr(metrics, "_budget_cache", None)
     if not isinstance(cache, dict):
         cache = metrics._budget_cache = {}
-    hit = cache.get(budget)
-    if hit is not None and metrics.n - hit[0] < REFIT_EVERY:
+    served = list(getattr(metrics, "served", ()))
+    stamp = (metrics.n, getattr(metrics, "decisions_total", 0))  # refit after new labels or new decisions
+    hit = cache.get((budget, mode))
+    if hit is not None and stamp[0] - hit[0][0] < REFIT_EVERY and stamp[1] - hit[0][1] < 5 * REFIT_EVERY:
         return hit[1]
-    tau = budget_threshold([(r[0], r[1]) for r in metrics.records], budget)
-    cache[budget] = (metrics.n, tau)
+    records = [(r[0], r[1]) for r in metrics.records]
+    tau = expected_threshold(records, served, budget) if mode == "expected" else budget_threshold(records, budget)
+    cache[(budget, mode)] = (stamp, tau)
     return tau
 
 
@@ -114,10 +154,11 @@ def decide(probs: Dist, settings: dict, metrics: Any = None, abstain_threshold: 
         exp_cost = (1.0 - conf) * cw
         rules.append("costs")
     if budget:
-        tau = _budget_tau(metrics, budget) if metrics is not None else None
+        mode = settings.get("risk_budget_mode") or "guaranteed"
+        tau = _budget_tau(metrics, budget, mode) if metrics is not None else None
         if tau is not None:
             thresholds.append(tau)
-            rules.append("risk_budget")
+            rules.append("risk_budget" if mode == "guaranteed" else "risk_budget_expected")
         else:
             rules.append("risk_budget_warming_up")  # too few labelled decisions: the other rules decide
     if not thresholds and not matrix:
@@ -141,6 +182,11 @@ def validate(settings: dict, options: list[str]) -> dict:
             if not 0 < b < 1:
                 raise ValueError("risk_budget must be between 0 and 1 (e.g. 0.05 = at most 5% wrong answers)")
         out["risk_budget"] = b
+    if "risk_budget_mode" in settings:
+        m = settings["risk_budget_mode"] or "guaranteed"
+        if m not in ("guaranteed", "expected"):
+            raise ValueError("risk_budget_mode must be guaranteed or expected")
+        out["risk_budget_mode"] = m
     for key in ("cost_wrong", "cost_abstain"):
         if key in settings:
             v = settings[key]

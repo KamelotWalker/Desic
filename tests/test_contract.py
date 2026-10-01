@@ -74,3 +74,24 @@ def test_risk_budget_keeps_answered_errors_down():
         t.learn(s, y, source="dataset", served=a["probabilities"], served_raw=a["raw"], abstained=pub["abstain"])
     assert pub["decision"]["rule"] == "risk_budget"
     assert answered > 500 and wrong / answered <= 0.03
+
+
+def test_expected_mode_trusts_calibration_when_labels_are_scarce():
+    from desic.core.contract import expected_threshold
+
+    served = [0.97] * 300 + [0.7] * 300  # calibrated: 3% and 30% wrong
+    labels = [(0.97, i % 33 != 0) for i in range(15)]  # only 15 labels, none wrong among them
+    assert budget_threshold(labels, 0.08) is None  # the guaranteed mode cannot even start
+    assert expected_threshold(labels, served, 0.08) == 0.97
+    # predicted (300·0.03 + 300·0.3)/600 = 16.5%, plus the labels' bias correction 1/15 − 0.03 = 3.7%
+    assert expected_threshold(labels, served, 0.25) == 0.7
+    assert expected_threshold(labels, served, 0.2) == 0.97
+    # labels that contradict the confidences pull the estimate up
+    bad = [(0.97, i % 2 == 0) for i in range(20)]
+    assert expected_threshold(bad, served, 0.08) > 1
+
+
+def test_validate_mode():
+    assert validate({"risk_budget_mode": "expected"}, ["a"]) == {"risk_budget_mode": "expected"}
+    with pytest.raises(ValueError):
+        validate({"risk_budget_mode": "yolo"}, ["a"])

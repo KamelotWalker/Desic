@@ -764,6 +764,9 @@ function tabSettings(q) {
   const num0 = (v, attrs) => h('input', { type: 'number', min: 0, step: 'any', value: v == null ? '' : v, placeholder: 'not used', ...attrs });
   const budget = num0(q.settings.risk_budget == null ? null : +(q.settings.risk_budget * 100).toFixed(2), { max: 99, step: 0.5 });
   const cw = num0(q.settings.cost_wrong), ca = num0(q.settings.cost_abstain);
+  const bmode = h('select', {}, [['guaranteed', 'guaranteed — labelled answers must prove it (safe; escalates a lot while labels are few)'],
+    ['expected', 'expected — trust the calibrated confidences, corrected by the labels (answers more; holds on average)']]
+    .map(([v, l]) => h('option', { value: v, selected: v === (q.settings.risk_budget_mode || 'guaranteed') }, l)));
   const opt = v => (v === '' ? null : +v);
   const add = q.type === 'choice' ? h('input', { placeholder: 'new answer name' }) : null;
   const save = h('button', { class: 'primary' }, 'Save settings');
@@ -772,7 +775,8 @@ function tabSettings(q) {
       instructions: instr.value, descriptions: Object.fromEntries(descs.map(([k, i]) => [k, i.value])),
       add_options: add && add.value.trim() ? [add.value.trim()] : undefined,
       settings: { abstain_threshold: +thr.value, teacher_mode: mode.value, teacher_weight: +tw.value,
-        risk_budget: budget.value === '' ? null : +budget.value / 100, cost_wrong: opt(cw.value), cost_abstain: opt(ca.value) },
+        risk_budget: budget.value === '' ? null : +budget.value / 100, risk_budget_mode: bmode.value,
+        cost_wrong: opt(cw.value), cost_abstain: opt(ca.value) },
     });
     toast('Saved', 'good'); await refreshQuestion(); renderTab();
   });
@@ -790,7 +794,8 @@ function tabSettings(q) {
       h('h3', {}, 'Decision contract'),
       h('p', { class: 'small muted' }, 'Instead of picking a threshold by hand, say what mistakes cost. When more than one rule is set, the strictest wins; unfamiliar inputs are always escalated.'),
       h('label', { class: 'field' }, h('span', {}, 'Risk budget: at most this % of answered decisions may be wrong'), budget),
-      h('p', { class: 'small muted' }, 'The student answers as much as it can while the error rate of its recent labelled answers stays within the budget (with a 90% safety margin). Needs 30 labelled decisions to start.'),
+      h('label', { class: 'field' }, h('span', {}, 'How the budget is checked'), bmode),
+      h('p', { class: 'small muted' }, 'The student answers as much as it can while its error rate stays within the budget. Guaranteed: recent labelled answers must fit with a 90% safety margin (needs 30 labelled decisions to start). Expected: needs 30 decisions, labelled or not.'),
       h('div', { class: 'row' },
         h('label', { class: 'field' }, h('span', {}, 'Cost of a wrong answer'), cw),
         h('label', { class: 'field' }, h('span', {}, 'Cost of escalating'), ca)),

@@ -132,11 +132,16 @@ class TaskMetrics:
         self.max_points = max_points
         self._every = 1
         self.decisions: deque = deque(maxlen=500)  # (abstained, teacher_called) per decision
+        self.served: deque = deque(maxlen=1000)  # confidence of each recent decision, labelled or not
         self.teacher_calls = 0
         self.decisions_total = 0
 
-    def record_decision(self, abstained: bool, teacher: bool) -> None:
+    def record_decision(self, abstained: bool, teacher: bool, confidence: float | None = None) -> None:
         self.decisions.append((abstained, teacher))
+        if confidence is not None:
+            if not hasattr(self, "served"):  # metrics saved before this field existed
+                self.served = deque(maxlen=1000)
+            self.served.append(confidence)
         self.decisions_total += 1
         self.teacher_calls += int(teacher)
 

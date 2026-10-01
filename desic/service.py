@@ -288,7 +288,7 @@ class Desic:
                 exp = task.explain(internal) if explain else None
                 rule = first_match(task.rules, {**internal["feats"].flat, "$text": state_text(state)})
             student = {"probabilities": internal["probabilities"], "raw": internal["raw"], "abstain": pub["abstain"],
-                       "answer": _answer_label(pub)}
+                       "answer": _answer_label(pub), "confidence": pub["confidence"]}
             source = "student"
             if rule is not None and rule["decision"] in internal["options"]:
                 pub = _force_answer(task, pub, rule["decision"])
@@ -335,7 +335,8 @@ class Desic:
         for name, pub in answers.items():
             task = self.tasks[name]
             with self.lock(name):
-                task.metrics.record_decision(stored[name]["student"]["abstain"], pub["source"] == "teacher")
+                task.metrics.record_decision(stored[name]["student"]["abstain"], pub["source"] == "teacher",
+                                             stored[name]["student"]["confidence"])
             stored[name].update({k: v for k, v in pub.items() if k != "explanation"})
             stored[name]["answer_label"] = _answer_label(pub)
         if record:

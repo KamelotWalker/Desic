@@ -98,6 +98,7 @@ def add_arguments(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--workers", type=int, default=os.cpu_count() or 1)
     ap.add_argument("--limit", type=int, help="subsample the training data (quick smoke runs)")
     ap.add_argument("--risk-budget", type=float, help="question setting risk_budget for the learner (e.g. 0.08)")
+    ap.add_argument("--risk-budget-mode", choices=("guaranteed", "expected"), default="guaranteed")
     ap.add_argument("--out", help="write the full results as JSON")
 
 
@@ -111,7 +112,8 @@ def run(args: argparse.Namespace) -> dict:
     jobs = [(s, seed) for s in names for seed in range(args.seeds)]
     t0 = time.time()
     with ProcessPoolExecutor(max_workers=max(1, args.workers)) as pool:
-        settings = {"risk_budget": args.risk_budget} if getattr(args, "risk_budget", None) else None
+        settings = ({"risk_budget": args.risk_budget, "risk_budget_mode": getattr(args, "risk_budget_mode", "guaranteed")}
+                    if getattr(args, "risk_budget", None) else None)
         futures = {job: pool.submit(run_one, job[0], job[1], args.learner, args.limit, settings) for job in jobs}
         done = {}
         for job, fut in futures.items():

@@ -286,6 +286,7 @@ def teacher(make: Make, train: list[Item], test: list[Item], classes: list[str],
     for i, (x, y) in enumerate(stream, 1):
         a = task.answer(x)
         pub = task.public(a)
+        task.metrics.record_decision(pub["abstain"], pub["abstain"], pub["confidence"])  # as the service does
         if pub["abstain"]:
             c = trng.choice(TEACHER_CONFIDENCES)
             right = trng.random() < c
@@ -332,7 +333,8 @@ def budget(make: Make, train: list[Item], test: list[Item], classes: list[str], 
     widest coverage any threshold could have had in that window, knowing the labels."""
     stream = _shuffled(train, seed)
     task = make(classes)
-    policies = {f"budget-{b:.0%}": b for b in BUDGETS} | {"threshold-0.6": None}
+    policies = ({f"budget-{b:.0%}": (b, "guaranteed") for b in BUDGETS} | {f"expected-{b:.0%}": (b, "expected") for b in BUDGETS}
+                | {"threshold-0.6": (None, None)})
     wins: dict[str, list[dict]] = {k: [] for k in policies}
     cur = {k: [0, 0] for k in policies}  # answered, wrong
     recs: list[tuple[float, bool]] = []
@@ -341,8 +343,9 @@ def budget(make: Make, train: list[Item], test: list[Item], classes: list[str], 
         a = task.answer(x)
         conf_ok = (confidence_of(a["probabilities"])[1], confidence_of(a["probabilities"])[0] == y)
         recs.append(conf_ok)
-        for name, b in policies.items():
-            task.settings["risk_budget"] = b
+        task.metrics.record_decision(False, False, conf_ok[0])
+        for name, (b, mode) in policies.items():
+            task.settings["risk_budget"], task.settings["risk_budget_mode"] = b, mode
             pub = task.public(a)
             if not pub["abstain"]:
                 cur[name][0] += 1
@@ -350,7 +353,7 @@ def budget(make: Make, train: list[Item], test: list[Item], classes: list[str], 
         task.settings["risk_budget"] = None
         task.learn(x, y, source="dataset", served=a["probabilities"], served_raw=a["raw"])
         if i % window == 0:
-            for name, b in policies.items():
+            for name, (b, _) in policies.items():
                 n_ans, n_wrong = cur[name]
                 row = {"decisions": i, "coverage": round(n_ans / window, 4),
                        "risk": round(n_wrong / n_ans, 4) if n_ans else None}
@@ -361,11 +364,11 @@ def budget(make: Make, train: list[Item], test: list[Item], classes: list[str], 
             recs = []
     half = len(wins["threshold-0.6"]) // 2
     headline, detail = {}, {}
-    for name, b in policies.items():
+    for name, (b, _) in policies.items():
         late = wins[name][half:]
         answered = sum(w["coverage"] * window for w in late)
         wrong = sum((w["risk"] or 0) * w["coverage"] * window for w in late)
-        key = name.replace("budget-", "b").replace("threshold-0.6", "t60")
+        key = name.replace("budget-", "b").replace("expected-", "e").replace("threshold-0.6", "t60")
         headline[f"{key}_risk"] = round(wrong / answered, 4) if answered else None
         headline[f"{key}_coverage"] = round(sum(w["coverage"] for w in late) / len(late), 4)
         if b is not None:

@@ -120,3 +120,26 @@ def test_only_the_wrapped_base_checkpoint_is_saved():
     assert [c[0] for c in t2.checkpoints] == [0]
     stats = t2.retract(["e10"])  # still correct after a restart, it just replays from the start
     assert stats["consolidated"] == 1 and stats["replayed"] == len(t2.log)
+
+
+def test_fading_trust_is_undone_exactly():
+    t = task(probation=1000, min_probation=1000, trust_halflife=50)
+    t.learn("refund my double charge please", "sales", source="human")
+    p = next(iter(t.store.entries.values()))
+    for s, y in rows(60):
+        t.learn(s, y, source="dataset")
+    before = t.store.trust(p, t.t)
+    t.learn("refund my double charge please now", "billing", source="human", ref="x")
+    assert t.store.trust(p, t.t) < before
+    t.retract(["x"])
+    assert abs(t.store.trust(p, t.t) - before) < 1e-9
+
+
+def test_gate_prior_and_sources():
+    from desic.core.patches import Gate
+
+    assert abs(Gate(prior=0.2).weights("2≠")[1] - 0.2) < 1e-9
+    t = task(probation=1000, min_probation=1000, gate_sources=("human",))
+    for s, y in rows(30):
+        t.learn(s, y, source="dataset")
+    assert t.gate.history == []  # dataset labels did not teach the gate

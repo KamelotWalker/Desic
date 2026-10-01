@@ -53,3 +53,22 @@ def test_replay_a_candidate_policy_on_logged_decisions():
     assert strict["coverage"] == 0.8 and strict["risk"] == 0.0
     priced = replay(DecisionPolicy(cost_wrong=10, cost_abstain=1), logged)  # threshold 0.9
     assert priced["total_cost"] == 20.0 and priced["cost_per_decision"] == 0.2
+
+
+def test_escalation_aware_answers_when_as_sure_as_the_teacher():
+    """S2 (RESEARCH.md): escalating to a teacher that is right 80% of the time is worse
+    than answering at 85% confidence."""
+    from desic.core.calibration import TaskMetrics
+
+    m = TaskMetrics()
+    probs = {"a": 0.85, "b": 0.15}
+    pol = DecisionPolicy(abstain_threshold=0.9, escalation_aware=True)
+    assert pol.decide(probs, m)["abstain"]  # teacher accuracy unknown yet: the threshold rules
+    for i in range(30):
+        m.record_served("teacher", i % 5 != 0)  # 80% right
+    d = pol.decide(probs, m)
+    assert not d["abstain"] and d["rule"].endswith("+escalation_aware") and d["teacher_accuracy"] == 0.8
+    assert pol.decide({"a": 0.7, "b": 0.3}, m)["abstain"]  # less sure than the teacher: still escalates
+    assert DecisionPolicy(abstain_threshold=0.9).decide(probs, m)["abstain"]  # off by default
+    priced = DecisionPolicy(cost_wrong=10, cost_abstain=1, escalation_aware=True)
+    assert priced.decide(probs, m)["abstain"]  # explicit costs already price the escalation

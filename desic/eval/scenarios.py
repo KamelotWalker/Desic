@@ -319,7 +319,9 @@ def teacher(make: Make, train: list[Item], test: list[Item], classes: list[str],
         if i > len(stream) // 2:
             served_wrong[1] += not served_ok
         if trng.random() < human_rate:
-            task.learn(x, y, source="human", served=a["probabilities"], served_raw=a["raw"], abstained=pub["abstain"])
+            served_action = ("teacher", said) if pub["abstain"] else ("student", confidence_of(a["probabilities"])[0])
+            task.learn(x, y, source="human", served=a["probabilities"], served_raw=a["raw"], abstained=pub["abstain"],
+                       served_action=served_action)
             cur["human"] += 1
         if i % window == 0 or i == len(stream):
             size = i - (windows[-1]["decisions"] if windows else 0)

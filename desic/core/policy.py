@@ -22,7 +22,9 @@ from . import contract
 from .calibration import confidence_of
 
 Dist = dict[str, float]
-KEYS = ("abstain_threshold", "risk_budget", "risk_budget_mode", "cost_wrong", "cost_abstain", "cost_matrix")
+KEYS = ("abstain_threshold", "risk_budget", "risk_budget_mode", "cost_wrong", "cost_abstain", "cost_matrix",
+        "escalation_aware")
+MIN_TEACHER_LABELS = 20  # labelled teacher answers needed before its accuracy is trusted
 
 
 @dataclass
@@ -33,6 +35,9 @@ class DecisionPolicy:
     cost_wrong: float | None = None
     cost_abstain: float | None = None
     cost_matrix: dict[str, dict[str, float]] | None = None
+    # Escalating is not free: whoever answers instead can be wrong too. When the student is at
+    # least as sure as the teacher has measured accurate, it answers itself (S2 in RESEARCH.md).
+    escalation_aware: bool = False
     version: int = 1
     updated_at: float = field(default_factory=time.time)
 
@@ -51,6 +56,8 @@ class DecisionPolicy:
             if not 0 <= t <= 1:
                 raise ValueError("abstain_threshold must be between 0 and 1")
             clean["abstain_threshold"] = t
+        if "escalation_aware" in changes:
+            clean["escalation_aware"] = bool(changes["escalation_aware"])
         changed = {k: v for k, v in clean.items() if getattr(self, k) != v}
         for k, v in changed.items():
             setattr(self, k, v)
@@ -61,11 +68,33 @@ class DecisionPolicy:
 
     def decide(self, probs: Dist, metrics: Any = None, abstain_threshold: float | None = None) -> dict:
         d = contract.decide(probs, self.settings(), metrics, abstain_threshold)
+        if (d["abstain"] and getattr(self, "escalation_aware", False) and abstain_threshold is None
+                and not self.cost_matrix and self.cost_abstain is None):  # explicit costs already price escalation
+            acc = teacher_accuracy(metrics)
+            if acc is not None and probs.get(d["answer"], 0.0) >= acc:
+                d["abstain"] = False
+                d["rule"] += "+escalation_aware"
+                d["teacher_accuracy"] = round(acc, 4)
         d["policy_version"] = self.version
         return d
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+def teacher_accuracy(metrics: Any) -> float | None:
+    """Measured accuracy of the teacher's served answers (None until enough of them got a label)."""
+    acts = getattr(metrics, "served_actions", None)
+    if not acts:
+        return None
+    key = (len(acts), acts[-1][0], acts[-1][2])
+    cache = getattr(metrics, "_teacher_acc", None)
+    if cache is not None and cache[0] == key:
+        return cache[1]
+    t = [ok for _, src, ok in acts if src == "teacher"]
+    acc = sum(t) / len(t) if len(t) >= MIN_TEACHER_LABELS else None
+    metrics._teacher_acc = (key, acc)
+    return acc
 
 
 def replay(policy: DecisionPolicy, logged: Iterable[tuple[Dist, str]], metrics: Any = None) -> dict:

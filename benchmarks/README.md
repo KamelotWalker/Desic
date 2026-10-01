@@ -8,6 +8,7 @@ Her geliştirme aşamasının ölçümleri burada **ayrı bir klasörde** ve de�
 | 01a | [`stage-01a-adagrad-g0-rejected`](stage-01a-adagrad-g0-rejected/) | İlk kullanıcı denemesindeki aşırı güven hatası için AdaGrad `g0` denemesi | **Reddedildi:** az veride ECE 0,122 → 0,363, sıralı akış %15,8 → %1,5 |
 | 01b | [`stage-01b-evidence-scaled-updates`](stage-01b-evidence-scaled-updates/) | Adımın etiketin kanıt değeriyle ölçeklenmesi + 3 düzeltme | Hata giderildi (%55'lik etiket: 0,94 → 0,35), Banking77'de regresyon yok |
 | 02 | [`stage-02-eval-harness`](stage-02-eval-harness/) | Faz 0: değerlendirme düzeneği, 7 akış senaryosu × 3 tohum | Karışık %88,8 · ECE 0,015; 30 hatalı etiket bir sınıfı ele geçiriyor (%77 → %1), geri alma = 5.000 olay; drift yarı ömrü 3.000 etiket; forgetting index 0,63 |
+| 03 | [`stage-03-reversible-patches`](stage-03-reversible-patches/) | Faz 2: geri alınabilir patch katmanı (`desic+patch`) ve temel model, aynı akışlar | Sıralı %13,7 → %80,2; patlama hasarı diğer sınıflarda 3,8 → 0,5 puan; geri alma 29,6 sn → 0,1 sn; karışık %88,9 (regresyon yok). Kötüleşen: drift (3.000 → 3.417), yalan tekrarlama (%7 → %23) |
 
 ## Her aşama klasöründe
 

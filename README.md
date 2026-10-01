@@ -186,6 +186,18 @@ Doğruluk tek başına yetmiyor: model akış boyunca nasıl öğreniyor, hatal�
 | 10 sınıfın anlamı değişiyor (drift) | Yarı toparlanma 3.000 etiket; drift dedektörü tetiklenmiyor |
 | Öğretmenli soğuk başlangıç | Öğretmene bağımlılık %95 → %46 |
 
+**Geri alınabilir patch katmanı** (`desic/core/patches.py`, [aşama 03](benchmarks/stage-03-reversible-patches/)): her etiket önce yerel, geri alınabilir bir patch olur ve kalıcı modele ancak 500 olaylık deneme süresinden sonra geçer. Aynı akışlarda temel modele göre:
+
+| | Temel model | Patch katmanı |
+|---|---|---|
+| Karışık akış | %88,75 | %88,86 |
+| Sıralı akış (forgetting index) | %13,7 (0,63) | **%80,2 (0,10)** |
+| 30 hatalı etiket: diğer sınıflara hasar | 3,8 puan | **0,5 puan** |
+| Bu etiketleri geri alma | 29,6 sn, 5.001 olay yeniden oynatılır | **0,1 sn, 0 olay** |
+| Drift yarı ömrü | 3.000 etiket | 3.417 etiket (kötü) |
+
+Patch katmanı şimdilik çekirdekte ve değerlendirme düzeneğinde; API ve dashboard hâlâ temel modeli kullanıyor.
+
 Tüm aşamaların ölçümleri, ham loglar ve JSON sonuçları: [`benchmarks/`](benchmarks/).
 
 Referans: yayınlanmış sonuçlarda (Casanueva ve ark., 2020) tam veriyle ince ayarlı BERT / ConveRT yaklaşık %93. Desic'in önceden eğitilmiş bir dil bilgisi yok; bu fark beklenen bir fark. Önceden eğitilmiş bir backbone (mmBERT / ModernBERT) ile nöral öğrenci GPU'da ayrıca ölçülmeli. Sıralı akıştaki çöküş bilinen bir zayıflık (catastrophic forgetting) ve bir sonraki geliştirme hattının ilk hedefi.
@@ -201,14 +213,14 @@ Referans: yayınlanmış sonuçlarda (Casanueva ve ark., 2020) tam veriyle ince 
 
 ```bash
 pip install -e '.[dev]'
-pytest                      # 62 test: çekirdek, API, öğretmen/üretim, nöral öğrenci (torch yoksa atlanır), değerlendirme
+pytest                      # 70 test: çekirdek, API, öğretmen/üretim, nöral öğrenci (torch yoksa atlanır), değerlendirme
 desic eval --seeds 1        # akış senaryoları (Banking77)
 desic serve --reload
 ```
 
 ```
 desic/
-  core/        features · experts · calibration · task · tree · model (adaptif ağaç) · drift · rules
+  core/        features · experts · calibration · task · patches (geri alınabilir katman) · tree · model (adaptif ağaç) · drift · rules
   eval/        data (Banking77) · metrics (prequential, seçici risk, forgetting, half-life) · scenarios · run
   neural/      text (girdi biçimi) · model (encoder + decision head) · train (kayıplar, RLCD, kalibrasyon) · runtime (kapılar)
   service.py   kararlar, feedback, öğretmen, işler, snapshot/rebuild

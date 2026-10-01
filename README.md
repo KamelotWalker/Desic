@@ -1,5 +1,7 @@
 # Desic
 
+> **Araştırma tezi ve kanıt durumu:** [`RESEARCH.md`](RESEARCH.md): immediate adaptation, bounded learning blast radius, explicit decision risk, reversible state evolution; her aşamanın ölçümleri [`benchmarks/`](benchmarks/) altında.
+
 **Kendi kendine öğrenen, kalibre typed-decision motoru (System One).**
 Jev ve Laya gibi Desic de serbest metin üretmez: bir `state` (metin veya JSON) ve tipli sorular alır, izin verilen cevaplar üzerinde **olasılık dağılımı** döndürür. Farkı: her kullanıcı geri bildiriminden **anında öğrenir**, emin olmadığında **çekimser kalır** ve gerekirse kendi LLM anahtarınızla çalışan bir "öğretmene" (System 2) danışıp ondan da öğrenir.
 

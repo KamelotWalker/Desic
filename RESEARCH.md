@@ -45,5 +45,9 @@ Değerler, aynı akışlarda temel modele ([aşama 03](benchmarks/stage-03-rever
 
 **B1 sonucu:** hasar pekiştirmede 0,5'ten 1,0 puana çıkıyor, sonra iyileşiyor. Temel modelin 3,8'ine dönmüyor. Pekiştirmede sönümleme hasarı sıfırlıyor, ama drift'i (%65,8 → %50) ve karışık doğruluğu (−3 puan) bozuyor: reddedildi ([10](benchmarks/stage-10-blast-radius/)).
 
+**Yeni hipotez:**
+
+| # | Hipotez | Hata modu / ölçüm | Kabul ölçütü |
+|---|---|---|---|
 | K1 | Etiketin *kaynağına* göre bir güven puanı (kaynağın geçmişte doğrulanan etiket oranı), hatalı etiket patlamasını doğru ama beklenmedik etiketlerden (drift) ayırabilir. Pekiştirme ve oy ağırlığı bu güvene bağlanırsa, hem pekiştirme sonrası hasar hem drift korunur. | B1 ve D1'in ortak gerilimi. | Patlama hasarı +600'de < 0,5 puan, drift ve karışık doğruluk Stage 06 seviyesinde. |
 

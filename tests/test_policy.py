@@ -74,3 +74,17 @@ def test_escalation_aware_answers_when_as_sure_as_the_teacher():
     assert DecisionPolicy(abstain_threshold=0.9).decide(probs, m)["abstain"]  # off by default
     priced = DecisionPolicy(cost_wrong=10, cost_abstain=1, escalation_aware=True)
     assert priced.decide(probs, m)["abstain"]  # explicit costs already price the escalation
+
+
+def test_escalation_compares_measured_not_stated_confidence():
+    from desic.core.calibration import TaskMetrics
+
+    m = TaskMetrics()
+    for i in range(30):
+        m.record_served("teacher", i % 5 != 0)  # teacher 80% right
+    for _ in range(100):  # an under-confident student: says 70%, is right 98% of the time
+        m.update({"a": 0.7, "b": 0.3}, "a", False)
+    m.update({"a": 0.7, "b": 0.3}, "b", False)
+    m.update({"a": 0.7, "b": 0.3}, "b", False)
+    pol = DecisionPolicy(abstain_threshold=0.9, escalation_aware=True)
+    assert not pol.decide({"a": 0.7, "b": 0.3}, m)["abstain"]  # worth ~96%, better than the teacher

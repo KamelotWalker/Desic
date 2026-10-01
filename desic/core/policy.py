@@ -72,7 +72,9 @@ class DecisionPolicy:
                 and not self.cost_matrix and self.cost_abstain is None):  # explicit costs already price escalation
             acc = teacher_accuracy(metrics)
             if acc is not None:
-                p = probs.get(d["answer"], 0.0)
+                # compare what the student's confidence has actually been worth so far, not the
+                # confidence itself: a student that under- or over-states it would otherwise be routed wrongly
+                p = measured_accuracy(metrics, probs.get(d["answer"], 0.0))
                 if d["abstain"] and p >= acc:  # as sure as the teacher: escalating would not help the user
                     d["abstain"] = False
                     d["rule"] += "+escalation_aware"
@@ -101,6 +103,24 @@ def teacher_accuracy(metrics: Any) -> float | None:
     acc = sum(t) / len(t) if len(t) >= MIN_TEACHER_LABELS else None
     metrics._teacher_acc = (key, acc)
     return acc
+
+
+LOCAL = 0.1  # labelled decisions within this distance of a confidence estimate its accuracy
+PRIOR = 10   # pseudo-observations that pull a thin estimate toward the stated confidence
+
+
+def measured_accuracy(metrics: Any, conf: float) -> float:
+    """How often the student was right on labelled decisions served with a similar confidence,
+    shrunk toward ``conf`` itself when there are few of them."""
+    recs = getattr(metrics, "records", None)
+    if not recs:
+        return conf
+    n = ok = 0
+    for r in recs:
+        if abs(r[0] - conf) <= LOCAL:
+            n += 1
+            ok += r[1]
+    return (ok + PRIOR * conf) / (n + PRIOR)
 
 
 def replay(policy: DecisionPolicy, logged: Iterable[tuple[Dist, str]], metrics: Any = None) -> dict:

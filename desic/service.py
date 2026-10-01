@@ -27,6 +27,7 @@ from .core.features import state_hash as state_hash_of
 from .core.features import state_text
 from .core.rules import first_match, validate_rule
 from .core.schema import to_label, to_number
+from .core import contract
 from .core.patches import PatchedTask
 from .core.task import CHOICE, NOUL, SCORE, DecisionTask, QuestionSpec, SpecError
 from .generation import design_task, generate_examples, normalize_design
@@ -219,6 +220,7 @@ class Desic:
                 if not 0 <= w <= 1:
                     raise ValueError("teacher_weight must be between 0 and 1")
                 task.settings["teacher_weight"] = w
+            task.settings.update(contract.validate(settings, task.spec.option_names))
         self.persist(task)
         self.bus.publish({"type": "task_updated", "task": name})
         return self.task_detail(name)
@@ -282,6 +284,7 @@ class Desic:
             with self.lock(name):
                 internal = task.answer(state, options)
                 pub = task.public(internal, abstain_threshold)
+                pub["decision"]["policy_version"] = task.version  # logged with the decision for later audits
                 exp = task.explain(internal) if explain else None
                 rule = first_match(task.rules, {**internal["feats"].flat, "$text": state_text(state)})
             student = {"probabilities": internal["probabilities"], "raw": internal["raw"], "abstain": pub["abstain"],

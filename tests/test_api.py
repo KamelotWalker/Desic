@@ -255,3 +255,18 @@ def test_students_saved_before_the_patch_layer_are_wrapped(tmp_path):
         assert q["labels"] == 150 and q["metrics"]["labels"] == 150 and q["patches"]["entries"] == 0
         r = c.post("/v1/decide", json={"state": "refund my invoice please", "questions": {"department": {}}}).json()
         assert r["answers"]["department"]["choice"] == "billing"
+
+
+def test_decision_contract_settings_and_logging(client):
+    teach_department(client, n=200)
+    r = client.patch("/v1/questions/department", json={"settings": {"cost_wrong": 10, "cost_abstain": 1}})
+    assert r.status_code == 200 and r.json()["settings"]["cost_wrong"] == 10.0
+    d = client.post("/v1/decide", json={"state": "refund my invoice please", "questions": {"department": {}}}).json()
+    dec = d["answers"]["department"]["decision"]
+    assert dec["rule"] == "costs" and dec["threshold"] == 0.9 and dec["propensity"] == 1.0 and dec["policy_version"] >= 200
+    bad = client.patch("/v1/questions/department", json={"settings": {"risk_budget": 2}})
+    assert bad.status_code == 400
+    r = client.patch("/v1/questions/department", json={"settings": {"cost_wrong": None, "cost_abstain": None, "risk_budget": 0.05}})
+    assert r.json()["settings"]["cost_wrong"] is None and r.json()["settings"]["risk_budget"] == 0.05
+    logged = client.get(f"/v1/decisions/{d['id']}").json()["answers"]["department"]
+    assert logged["decision"]["rule"] == "costs" and logged["decision"]["policy_version"] == dec["policy_version"]

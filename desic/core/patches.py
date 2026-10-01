@@ -333,7 +333,8 @@ class PatchedTask:
         return max(self.min_probation, min(self.max_probation, int(self.probation_share * self.t)))
 
     def public(self, internal: dict, abstain_threshold: float | None = None) -> dict:
-        return self.base.public(internal, abstain_threshold)
+        # the risk budget is checked against what users were served: this layer's metrics
+        return self.base.public(internal, abstain_threshold, metrics=self.metrics)
 
     # ---------------------------------------------------------------- answer
     def _forecasts(self, state: Any, options: list[str] | None = None) -> dict:

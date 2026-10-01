@@ -26,13 +26,13 @@ Item = tuple[str, str]
 Make = Callable[[list[str]], Any]
 
 
-def make_desic(classes: list[str]) -> DecisionTask:
+def make_desic(classes: list[str], settings: dict | None = None) -> DecisionTask:
     return DecisionTask(QuestionSpec.parse("intent", {"type": "choice", "instructions": "Which intent is this?",
-                                                      "criteria": list(classes)}))
+                                                      "criteria": list(classes)}), settings)
 
 
-def make_patched(classes: list[str], **kw: Any) -> PatchedTask:
-    return PatchedTask(make_desic(classes), **kw)
+def make_patched(classes: list[str], settings: dict | None = None, **kw: Any) -> PatchedTask:
+    return PatchedTask(make_desic(classes, settings), **kw)
 
 
 LEARNERS: dict[str, Make] = {"desic": make_desic, "desic+patch": make_patched}
@@ -321,6 +321,71 @@ def teacher(make: Make, train: list[Item], test: list[Item], classes: list[str],
     }
 
 
+BUDGETS = (0.02, 0.05, 0.10)
+
+
+def budget(make: Make, train: list[Item], test: list[Item], classes: list[str], seed: int, window: int = 1000) -> dict:
+    """Does the risk budget hold? A shuffled stream where every decision is labelled
+    afterwards; for each budget (and for the fixed default threshold) the decision rule
+    runs side by side on the same student, and the realized error rate among the
+    decisions it would have answered is compared with the budget. The oracle is the
+    widest coverage any threshold could have had in that window, knowing the labels."""
+    stream = _shuffled(train, seed)
+    task = make(classes)
+    policies = {f"budget-{b:.0%}": b for b in BUDGETS} | {"threshold-0.6": None}
+    wins: dict[str, list[dict]] = {k: [] for k in policies}
+    cur = {k: [0, 0] for k in policies}  # answered, wrong
+    recs: list[tuple[float, bool]] = []
+    t0 = time.time()
+    for i, (x, y) in enumerate(stream, 1):
+        a = task.answer(x)
+        conf_ok = (confidence_of(a["probabilities"])[1], confidence_of(a["probabilities"])[0] == y)
+        recs.append(conf_ok)
+        for name, b in policies.items():
+            task.settings["risk_budget"] = b
+            pub = task.public(a)
+            if not pub["abstain"]:
+                cur[name][0] += 1
+                cur[name][1] += pub["choice"] != y
+        task.settings["risk_budget"] = None
+        task.learn(x, y, source="dataset", served=a["probabilities"], served_raw=a["raw"])
+        if i % window == 0:
+            for name, b in policies.items():
+                n_ans, n_wrong = cur[name]
+                row = {"decisions": i, "coverage": round(n_ans / window, 4),
+                       "risk": round(n_wrong / n_ans, 4) if n_ans else None}
+                if b is not None:
+                    row["oracle_coverage"] = round(_oracle_coverage(recs, b), 4)
+                wins[name].append(row)
+                cur[name] = [0, 0]
+            recs = []
+    half = len(wins["threshold-0.6"]) // 2
+    headline, detail = {}, {}
+    for name, b in policies.items():
+        late = wins[name][half:]
+        answered = sum(w["coverage"] * window for w in late)
+        wrong = sum((w["risk"] or 0) * w["coverage"] * window for w in late)
+        key = name.replace("budget-", "b").replace("threshold-0.6", "t60")
+        headline[f"{key}_risk"] = round(wrong / answered, 4) if answered else None
+        headline[f"{key}_coverage"] = round(sum(w["coverage"] for w in late) / len(late), 4)
+        if b is not None:
+            headline[f"{key}_oracle_coverage"] = round(sum(w["oracle_coverage"] for w in late) / len(late), 4)
+            headline[f"{key}_windows_over"] = sum(1 for w in wins[name][1:] if w["risk"] is not None and w["risk"] > b)
+        detail[name] = wins[name]
+    return {"headline": headline, "windows": detail, "seconds": round(time.time() - t0, 1)}
+
+
+def _oracle_coverage(recs: list[tuple[float, bool]], b: float) -> float:
+    """Widest share of these decisions a confidence threshold could answer with error rate ≤ b."""
+    best, errors = 0, 0
+    ranked = sorted(recs, key=lambda r: -r[0])
+    for k, (c, ok) in enumerate(ranked, 1):
+        errors += not ok
+        if (k == len(ranked) or ranked[k][0] != c) and errors / k <= b:
+            best = k
+    return best / len(recs) if recs else 0.0
+
+
 SCENARIOS: dict[str, Callable[..., dict]] = {
     "shuffled": shuffled,
     "sorted": class_sorted,
@@ -329,4 +394,5 @@ SCENARIOS: dict[str, Callable[..., dict]] = {
     "burst": burst,
     "drift": drift,
     "teacher": teacher,
+    "budget": budget,
 }

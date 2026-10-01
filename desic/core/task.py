@@ -19,6 +19,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from typing import Any, Callable
 
+from . import contract
 from .calibration import TaskMetrics, TemperatureCalibrator, confidence_of
 from .drift import DDM, DRIFT
 from .experts import Dist, LinearExpert, MemoryExpert, Mixture, PriorExpert, TreeExpert, normalize
@@ -37,6 +38,11 @@ DEFAULT_SETTINGS = {
     "abstain_threshold": 0.6,   # abstain when calibrated confidence is below this
     "teacher_mode": "on_abstain",  # off | on_abstain | always
     "teacher_weight": 0.5,      # how much a teacher label counts vs a human label (1.0)
+    # decision contract (see core/contract.py); None = not used
+    "risk_budget": None,        # at most this share of answered decisions may be wrong
+    "cost_wrong": None,         # cost of a wrong answer …
+    "cost_abstain": None,       # … vs the cost of escalating to the teacher / a human
+    "cost_matrix": None,        # {answer: {true answer: cost}} for mistakes that cost differently
 }
 
 
@@ -236,10 +242,13 @@ class DecisionTask:
                 known += v * v
         return 1.0 if total == 0 else known / total
 
-    def public(self, internal: dict, abstain_threshold: float | None = None) -> dict:
+    def public(self, internal: dict, abstain_threshold: float | None = None, metrics: TaskMetrics | None = None) -> dict:
+        """The answer as served. ``metrics`` are the labelled decisions the risk budget is
+        checked against (the patch layer passes its own)."""
         probs = internal["probabilities"]
-        best, conf = confidence_of(probs)
-        threshold = self.settings["abstain_threshold"] if abstain_threshold is None else abstain_threshold
+        _, conf = confidence_of(probs)
+        decision = contract.decide(probs, {**DEFAULT_SETTINGS, **self.settings}, metrics or self.metrics, abstain_threshold)
+        best = decision["answer"]  # the cheapest answer under a cost matrix, otherwise the most probable
         knows = bool(internal["weights"])
         out: dict[str, Any] = {"type": self.spec.type}
         rounded = {o: round(p, 4) for o, p in sorted(probs.items(), key=lambda kv: -kv[1])}
@@ -251,11 +260,12 @@ class DecisionTask:
                        level=best, probabilities={lv: round(probs.get(lv, 0.0), 4) for lv in levels})
         else:
             p = probs.get("true", 0.5)
-            out.update(probability=round(p, 4), answer=p >= 0.5)
+            out.update(probability=round(p, 4), answer=best == "true")
         out["confidence"] = round(conf, 4)
         # Most of the evidence is new to the student: whatever the (shrunk) confidence says,
         # this is a question for the teacher or a human.
-        out["abstain"] = (not knows) or conf < threshold or bool(internal.get("unfamiliar"))
+        out["abstain"] = (not knows) or decision["abstain"] or bool(internal.get("unfamiliar"))
+        out["decision"] = {k: decision[k] for k in ("rule", "threshold", "expected_cost", "propensity")}
         return out
 
     def explain(self, internal: dict) -> dict:

@@ -16,6 +16,7 @@ import random
 import subprocess
 import time
 from concurrent.futures import ProcessPoolExecutor
+from functools import partial
 from pathlib import Path
 
 from .data import banking77
@@ -34,9 +35,11 @@ def _data(limit: int | None) -> tuple[list, list, list[str]]:
     return _DATA[limit]
 
 
-def run_one(scenario: str, seed: int, learner: str = "desic", limit: int | None = None) -> dict:
+def run_one(scenario: str, seed: int, learner: str = "desic", limit: int | None = None,
+            settings: dict | None = None) -> dict:
     train, test, classes = _data(limit)
-    out = SCENARIOS[scenario](LEARNERS[learner], train, test, classes, seed)
+    make = partial(LEARNERS[learner], settings=settings) if settings else LEARNERS[learner]
+    out = SCENARIOS[scenario](make, train, test, classes, seed)
     out["seed"] = seed
     return out
 
@@ -94,6 +97,7 @@ def add_arguments(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--learner", default="desic", choices=sorted(LEARNERS))
     ap.add_argument("--workers", type=int, default=os.cpu_count() or 1)
     ap.add_argument("--limit", type=int, help="subsample the training data (quick smoke runs)")
+    ap.add_argument("--risk-budget", type=float, help="question setting risk_budget for the learner (e.g. 0.08)")
     ap.add_argument("--out", help="write the full results as JSON")
 
 
@@ -107,7 +111,8 @@ def run(args: argparse.Namespace) -> dict:
     jobs = [(s, seed) for s in names for seed in range(args.seeds)]
     t0 = time.time()
     with ProcessPoolExecutor(max_workers=max(1, args.workers)) as pool:
-        futures = {job: pool.submit(run_one, job[0], job[1], args.learner, args.limit) for job in jobs}
+        settings = {"risk_budget": args.risk_budget} if getattr(args, "risk_budget", None) else None
+        futures = {job: pool.submit(run_one, job[0], job[1], args.learner, args.limit, settings) for job in jobs}
         done = {}
         for job, fut in futures.items():
             done[job] = fut.result()

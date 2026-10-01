@@ -143,3 +143,32 @@ def test_gate_prior_and_sources():
     for s, y in rows(30):
         t.learn(s, y, source="dataset")
     assert t.gate.history == []  # dataset labels did not teach the gate
+
+
+def test_retracted_labels_leave_the_risk_controller_too():
+    """R1 (RESEARCH.md): after a retraction the risk budget sees exactly what a system
+    that never got those labels would see."""
+    from desic.core.contract import _budget_tau
+
+    data, extra = rows(300), rows(60, seed=4)
+    bad = [(s, "sales" if y != "sales" else "billing") for s, y in rows(40, seed=5)]
+
+    def run(with_bad: bool):
+        t = task(probation=1000, min_probation=1000)
+        for s, y in data:
+            t.learn(s, y, source="human")
+        if with_bad:
+            for i, (s, y) in enumerate(bad):
+                t.learn(s, y, source="human", ref=f"bad-{i}")
+        return t
+
+    clean, dirty = run(False), run(True)
+    assert dirty.metrics.n == clean.metrics.n + len(bad)
+    tau_dirty = _budget_tau(dirty.metrics, 0.05)
+    dirty.retract(f"bad-{i}" for i in range(len(bad)))
+    m, c = dirty.metrics, clean.metrics
+    assert (m.n, m.correct, len(m.records)) == (c.n, c.correct, len(c.records))
+    assert abs(m.nll_sum - c.nll_sum) < 1e-9 and m.confusion == c.confusion
+    assert [r[:2] for r in m.records] == [r[:2] for r in c.records]
+    assert _budget_tau(m, 0.05) == _budget_tau(c, 0.05) != tau_dirty
+    assert dirty.labels == clean.labels

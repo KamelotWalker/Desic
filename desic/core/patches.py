@@ -72,6 +72,7 @@ class Patch:
     contra: float = 0.0   # later neighbours with another answer
     t_ref: int = 0        # time support/contra were last decayed to
     touched: list = field(default_factory=list)  # (neighbour id, d_support, d_contra, time) this entry caused
+    metric: tuple | None = None  # its contribution to the served-quality metrics (undone on retract)
 
     def _fade(self, now: int, halflife: float | None) -> float:
         return 0.5 ** ((now - self.t_ref) / halflife) if halflife and now > self.t_ref else 1.0
@@ -433,7 +434,8 @@ class PatchedTask:
         if source in GROUND_TRUTH_SOURCES and len(dist) == 1:
             if served is None:  # test-then-train: score what answer() would have served
                 served = self._serve(f)[0]
-            self.metrics.update(served, p.label, abstained, spec.option_names if spec.type == SCORE else None)
+            self.metrics.update(served, p.label, abstained, spec.option_names if spec.type == SCORE else None, ref=p.id)
+            p.metric = self.metrics.last_contribution
             self.calibrator.add(f["raw"], p.label)
             self.calib_log.append((p.id, f["raw"], p.label))
         self.labels_by_source[source] = self.labels_by_source.get(source, 0) + 1
@@ -520,6 +522,8 @@ class PatchedTask:
                     nb.support -= ds * f
                     nb.contra -= dc * f
         if ids:
+            # the served-quality metrics feed the risk budget: a retracted label must not count there either
+            self.metrics.forget([self.store.entries[i].metric for i in ids if getattr(self.store.entries[i], "metric", None)])
             self.gate.forget(ids)
             kept = [c for c in self.calib_log if c[0] not in ids]
             self.calib_log = deque(kept, maxlen=self.calib_log.maxlen)

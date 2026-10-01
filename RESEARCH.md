@@ -29,14 +29,14 @@ Değerler, aynı akışlarda temel modele ([aşama 03](benchmarks/stage-03-rever
 | | Politika ile model durumunun ayrılması | — | Kısmi: kural ve eşik loglanıyor, ama "politika sürümü" = model sürümü | ⚠️ açık | — |
 | Reversible state | Deneme süresindeki etiketi geri alma | 29,6 sn, 5.001 olay | 0,16 sn, 0 olay, birebir | ✅ | [06](benchmarks/stage-06-diagnosis/), `tests/test_patches.py` |
 | | Pekiştirilmiş etiketi geri alma | tam yeniden oynatma | kontrol noktasından yeniden oynatma, birebir | ✅ | `tests/test_patches.py` |
-| | Geri alınan etiketin risk kontrolünden (servis metrikleri) silinmesi | — | **silinmiyor** | ⚠️ açık | — |
+| | Geri alınan etiketin risk kontrolünden (servis metrikleri) silinmesi | — | siliniyor; risk eşiği, o etiketi hiç görmemiş bir sistemle birebir aynı (R1) | ✅ | `tests/test_patches.py::test_retracted_labels_leave_the_risk_controller_too` |
 | | Yeniden başlatmadan sonra pekiştirilmiş etiketi geri alma | — | baştan yeniden oynatma (kontrol noktaları diske yazılmıyor) | 🟡 | [04](benchmarks/stage-04-service-integration/) |
 
 ## Açıklar ve sıradaki hipotezler
 
 | # | Hipotez | Hata modu / ölçüm | Kabul ölçütü |
 |---|---|---|---|
-| R1 | Geri alınan bir etiket, risk kontrolünün kullandığı servis metriklerinden de çıkarılırsa, geri almadan sonraki risk eşiği o etiketi hiç görmemiş bir sistemle aynı olur. | Şu an geri alınan yanlış etiketler eşiği etkilemeye devam ediyor. | Unit test: geri alma sonrası eşik = karşı-olgusal eşik. |
+| R1 ✅ | Geri alınan bir etiket, risk kontrolünün kullandığı servis metriklerinden de çıkarılırsa, geri almadan sonraki risk eşiği o etiketi hiç görmemiş bir sistemle aynı olur. | Şu an geri alınan yanlış etiketler eşiği etkilemeye devam ediyor. | Unit test: geri alma sonrası eşik = karşı-olgusal eşik. |
 | B1 | 30 hatalı etiket deneme süresini geçip pekiştirilince, diğer sınıflara hasar temel modelin seviyesine (3,8 puan) geri döner. | `burst` senaryosuna "pekiştirmeden sonra" ölçümü eklenecek. | Doğrulanırsa: pekiştirme kapısı (çelişkili bölgede kanıt toplanana kadar beklet) bir ablasyonla denenecek. |
 | P1 | Karar politikası (kontrat, eşikler, risk kontrolcüsü) model durumundan ayrı bir nesne ve sürüm olursa, politika değişikliği modele dokunmadan uygulanır ve geri alınır. Loglanan kararlar yeni bir politikayla yeniden değerlendirilebilir. | Şu an politika sürümü = model sürümü; ayar değişikliği ayrı izlenmiyor. | Her kararda (model sürümü, politika sürümü) ayrı loglanıyor; politika değişikliği modeli değiştirmiyor (test). |
 | S1 | Servis edilen *son* aksiyon (öğretmen ya da kural cevabı dahil) risk hesabına girerse, raporlanan risk kullanıcının gerçekten gördüğü hatayı yansıtır. | Şu an yalnızca öğrencinin kendi cevabı sayılıyor. | Öğretmenli senaryoda "servis edilen aksiyon hatası" ayrı raporlanıyor. |

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import math
 from collections import deque
+from typing import Any
 
 Dist = dict[str, float]
 EPS = 1e-6
@@ -145,7 +146,9 @@ class TaskMetrics:
         self.decisions_total += 1
         self.teacher_calls += int(teacher)
 
-    def update(self, served: Dist, label: str, abstained: bool, levels: list[str] | None = None) -> bool:
+    def update(self, served: Dist, label: str, abstained: bool, levels: list[str] | None = None, ref: Any = None) -> bool:
+        """Score one served answer against its label. ``ref`` identifies the label so that
+        :meth:`forget` can take it back out if the label is retracted."""
         pred, conf = confidence_of(served)
         ok = pred == label
         nll = -math.log(max(served.get(label, 0.0), EPS))
@@ -163,9 +166,10 @@ class TaskMetrics:
         self.correct += ok
         self.nll_sum += nll
         self.brier_sum += brier
-        self.records.append((conf, ok, abstained, nll, brier, rps))
+        self.records.append((conf, ok, abstained, nll, brier, rps, ref))
         row = self.confusion.setdefault(label, {})
         row[pred] = row.get(pred, 0) + 1
+        self.last_contribution = (ref, ok, nll, brier, label, pred)
         if self.n % self._every == 0:
             recent = list(self.records)[-200:]
             ece, _ = reliability([(c, o) for c, o, *_ in recent])
@@ -180,6 +184,28 @@ class TaskMetrics:
                 self.history = self.history[1::2]
                 self._every *= 2
         return ok
+
+    def forget(self, contributions: list[tuple]) -> int:
+        """Take retracted labels back out: their records leave the window and their share of
+        the running totals is subtracted. ``contributions`` are ``last_contribution`` tuples
+        saved when the labels were scored. The learning-curve history is an audit trail and
+        keeps what was served at the time."""
+        refs = {c[0] for c in contributions}
+        if not refs:
+            return 0
+        self.records = deque((r for r in self.records if not (len(r) > 6 and r[6] in refs)), maxlen=self.records.maxlen)
+        for _, ok, nll, brier, label, pred in contributions:
+            self.n -= 1
+            self.correct -= ok
+            self.nll_sum -= nll
+            self.brier_sum -= brier
+            row = self.confusion.get(label, {})
+            if row.get(pred):
+                row[pred] -= 1
+                if not row[pred]:
+                    del row[pred]
+        self.__dict__.pop("_budget_cache", None)  # the risk thresholds must be refit without them
+        return len(refs)
 
     def summary(self) -> dict:
         recs = list(self.records)

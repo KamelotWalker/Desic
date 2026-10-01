@@ -152,7 +152,7 @@ def noisy(make: Make, train: list[Item], test: list[Item], classes: list[str], s
 
 
 def burst(make: Make, train: list[Item], test: list[Item], classes: list[str], seed: int, size: int = 30,
-          at: float = 0.5, probe_every: int = 100) -> dict:
+          at: float = 0.5, probe_every: int = 100, harm_at: tuple[int, ...] = (600, 1000)) -> dict:
     """A burst of ``size`` consecutive wrong labels: messages of a victim class A
     labelled as class B (a careless or malicious annotator), in the middle of a
     clean stream. Measures the damage, the recovery from later clean labels, and
@@ -200,14 +200,26 @@ def burst(make: Make, train: list[Item], test: list[Item], classes: list[str], s
         undo_seconds = round(time.time() - u0, 4)
         undo_events = split
     undo, undo_a = evaluate(clean, test), evaluate(clean, a_test)
-    del clean
 
-    # Recovery without undo: keep learning from the clean remainder of the stream.
+    # Recovery without undo: keep learning from the clean remainder of the stream. The undone
+    # copy (a twin that never saw the burst) learns the same labels alongside, so the harm the
+    # burst still does to the *other* classes can be measured at any later point, in particular
+    # after the burst has left probation and reached the base model (B1 in RESEARCH.md).
+    def others_acc(t: Any) -> float:
+        return evaluate(t, others_test)["accuracy"]
+
+    harm = {0: round(others_acc(clean) - others_acc(task), 4)}
     rec = [(0, after_a["accuracy"])]
+    last = max(harm_at) if harm_at else 0
     for i, (x, y) in enumerate(rest, 1):
         _step(task, pq, x, y)
+        if i <= last:
+            _step(clean, None, x, y)
+            if i in harm_at:
+                harm[i] = round(others_acc(clean) - others_acc(task), 4)
         if i % probe_every == 0:
             rec.append((i, evaluate(task, a_test)["accuracy"]))
+    del clean
     final, final_a = evaluate(task, test), evaluate(task, a_test)
     hl = half_life(rec, after_a["accuracy"], before_a["accuracy"])
     return {
@@ -215,7 +227,8 @@ def burst(make: Make, train: list[Item], test: list[Item], classes: list[str], s
                      "victim_as_attack_label": as_b, "others_drop": round(others_before - others_after, 4),
                      "recovery_half_life": hl, "victim_final": final_a["accuracy"],
                      "victim_after_undo": undo_a["accuracy"], "accuracy_change_after_undo": round(undo["accuracy"] - before["accuracy"], 4),
-                     "undo_events_replayed": undo_events, "undo_seconds": undo_seconds},
+                     "undo_events_replayed": undo_events, "undo_seconds": undo_seconds,
+                     **{f"others_harm_at_{k}": v for k, v in harm.items()}},
         "victim": a_cls, "attack_label": b_cls, "burst_size": len(attack),
         "victim_labels_after_burst": sum(y == a_cls for _, y in rest),
         "before": _brief(before), "after": _brief(after), "final": _brief(final),

@@ -12,11 +12,13 @@ stages and the curves behind them.
 
 from __future__ import annotations
 
+import copy
 import random
 import time
 from typing import Any, Callable
 
 from ..core.calibration import confidence_of
+from ..core.patches import PatchedTask
 from ..core.task import DecisionTask, QuestionSpec
 from .metrics import Prequential, evaluate, forgetting_index, half_life
 
@@ -29,7 +31,11 @@ def make_desic(classes: list[str]) -> DecisionTask:
                                                       "criteria": list(classes)}))
 
 
-LEARNERS: dict[str, Make] = {"desic": make_desic}
+def make_patched(classes: list[str], **kw: Any) -> PatchedTask:
+    return PatchedTask(make_desic(classes), **kw)
+
+
+LEARNERS: dict[str, Make] = {"desic": make_desic, "desic+patch": make_patched}
 
 
 def _shuffled(train: list[Item], seed: int) -> list[Item]:
@@ -38,12 +44,12 @@ def _shuffled(train: list[Item], seed: int) -> list[Item]:
     return stream
 
 
-def _step(task: Any, pq: Prequential | None, x: str, given: str, true: str | None = None) -> dict:
+def _step(task: Any, pq: Prequential | None, x: str, given: str, true: str | None = None, ref: str | None = None) -> dict:
     """Serve an answer, score it against the true label, then learn the given label."""
     a = task.answer(x)
     if pq is not None:
         pq.add(a["probabilities"], given if true is None else true)
-    task.learn(x, given, source="dataset", served=a["probabilities"], served_raw=a["raw"])
+    task.learn(x, given, source="dataset", served=a["probabilities"], served_raw=a["raw"], ref=ref)
     return a
 
 
@@ -170,18 +176,30 @@ def burst(make: Make, train: list[Item], test: list[Item], classes: list[str], s
     for x, y in stream[:split]:
         _step(task, pq, x, y)
     before, before_a = evaluate(task, test), evaluate(task, a_test)
-    for x, g in attack:
-        _step(task, pq, x, g, true=a_cls)
+    for i, (x, g) in enumerate(attack):
+        _step(task, pq, x, g, true=a_cls, ref=f"burst-{i}")
+    others_test = [it for it in test if it[1] != a_cls]
     after, after_a = evaluate(task, test), evaluate(task, a_test)
+    others_before = round((before["accuracy"] * len(test) - before_a["accuracy"] * len(a_test)) / len(others_test), 4)
+    others_after = round((after["accuracy"] * len(test) - after_a["accuracy"] * len(a_test)) / len(others_test), 4)
     as_b = _share(task, a_test, b_cls)
 
-    # Undo today = throw the student away and replay the log without the burst.
-    u0 = time.time()
-    clean = make(classes)
-    for x, y in stream[:split]:
-        clean.learn(x, y, source="dataset")
-    undo_seconds = round(time.time() - u0, 2)
-    undo_a = evaluate(clean, a_test)
+    # Undo: a learner that can retract labels does so on a copy; otherwise the only
+    # way back is to throw the student away and replay the log without the burst.
+    if hasattr(task, "retract"):
+        clean = copy.deepcopy(task)
+        u0 = time.time()
+        stats = clean.retract(f"burst-{i}" for i in range(len(attack)))
+        undo_seconds = round(time.time() - u0, 4)
+        undo_events = stats["replayed"]
+    else:
+        u0 = time.time()
+        clean = make(classes)
+        for x, y in stream[:split]:
+            clean.learn(x, y, source="dataset")
+        undo_seconds = round(time.time() - u0, 4)
+        undo_events = split
+    undo, undo_a = evaluate(clean, test), evaluate(clean, a_test)
     del clean
 
     # Recovery without undo: keep learning from the clean remainder of the stream.
@@ -194,13 +212,14 @@ def burst(make: Make, train: list[Item], test: list[Item], classes: list[str], s
     hl = half_life(rec, after_a["accuracy"], before_a["accuracy"])
     return {
         "headline": {"victim_before": before_a["accuracy"], "victim_after": after_a["accuracy"],
-                     "victim_as_attack_label": as_b, "overall_drop": round(before["accuracy"] - after["accuracy"], 4),
+                     "victim_as_attack_label": as_b, "others_drop": round(others_before - others_after, 4),
                      "recovery_half_life": hl, "victim_final": final_a["accuracy"],
-                     "undo_events_replayed": split, "undo_seconds": undo_seconds},
+                     "victim_after_undo": undo_a["accuracy"], "accuracy_change_after_undo": round(undo["accuracy"] - before["accuracy"], 4),
+                     "undo_events_replayed": undo_events, "undo_seconds": undo_seconds},
         "victim": a_cls, "attack_label": b_cls, "burst_size": len(attack),
         "victim_labels_after_burst": sum(y == a_cls for _, y in rest),
         "before": _brief(before), "after": _brief(after), "final": _brief(final),
-        "victim_curve": rec, "victim_after_undo": undo_a["accuracy"], "prequential": pq.summary(),
+        "victim_curve": rec, "after_undo": _brief(undo), "prequential": pq.summary(),
         "seconds": round(time.time() - t0, 1),
     }
 

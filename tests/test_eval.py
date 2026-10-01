@@ -72,7 +72,8 @@ def test_every_scenario_runs_and_reports_a_headline(tickets):
     b = runs["burst"]
     assert b["burst_size"] == 15 and b["victim"] != b["attack_label"]
     assert b["headline"]["victim_after"] <= b["headline"]["victim_before"]
-    assert b["victim_after_undo"] == b["headline"]["victim_before"]  # undo = replaying the clean log
+    assert b["headline"]["victim_after_undo"] == b["headline"]["victim_before"]  # undo = replaying the clean log
+    assert b["headline"]["accuracy_change_after_undo"] == 0
     assert len(runs["teacher"]["windows"]) == 3
     assert set(SCENARIOS) >= {"shuffled", "sorted", "noise-1%", "noise-5%", "burst", "drift", "teacher"}
 

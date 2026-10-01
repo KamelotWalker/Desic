@@ -286,10 +286,15 @@ class DecisionTask:
     # ------------------------------------------------------------------ learn
     def learn(self, state: Any, target: str | Dist, source: str = "human", weight: float | None = None,
               served: Dist | None = None, served_raw: Dist | None = None, abstained: bool = False,
-              ref: str | None = None) -> list[dict]:
+              ref: str | None = None, replay: bool = False) -> list[dict]:
         """Learn one example. ``served``/``served_raw`` are the (calibrated / raw)
         probabilities the user actually saw; when omitted the task predicts
-        first (test-then-train) so the metrics stay prequential."""
+        first (test-then-train) so the metrics stay prequential.
+
+        ``replay`` rehearses an example that was already learned (consolidation in
+        :mod:`desic.core.patches`): only the linear model and the tree are trained. It is
+        not new evidence, so metrics, calibration, expert weights, base rates, the
+        memory and the label counts are left alone."""
         if not isinstance(target, dict):
             target = self.spec.label_of(target)
             if target not in self.spec.options:
@@ -305,6 +310,10 @@ class DecisionTask:
             weight = self.settings["teacher_weight"] if source == "teacher" else 1.0
         opts = self.spec.option_names
         feats = self.featurizer.extract(state)
+        if replay:
+            self.linear.learn(feats, dist, weight, opts)
+            self.tree.learn(feats, dist, weight)
+            return []
         key = state_hash(state)
         preds = self._predict_experts(feats, key, opts, state)
         events: list[dict] = []

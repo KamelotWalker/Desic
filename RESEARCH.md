@@ -50,7 +50,15 @@ Değerler, aynı akışlarda temel modele ([aşama 03](benchmarks/stage-03-rever
 | # | Hipotez | Hata modu / ölçüm | Kabul ölçütü |
 |---|---|---|---|
 | S2 ❌ | Çekimser kalmak bedava değil: sorulan tarafın (öğretmen) hatası kullanıcının hatası olur. Çekimserlik eşiği ölçülen öğretmen doğruluğunu aşmazsa ve risk bütçesi servis edilen aksiyon üzerinden tanımlanırsa, kullanıcının gördüğü hata düşer. | Garantili %8 bütçe kararların %95'ini %80 doğru öğretmene gönderiyor: kullanıcı hatası %19 ([11](benchmarks/stage-11-policy-and-served-risk/)). | Öğretmenli senaryoda kullanıcı hatası < %14,9 (bütçesiz temel model), test doğruluğu korunuyor. |
-| K1 | Etiketin *kaynağına* göre bir güven puanı (kaynağın geçmişte doğrulanan etiket oranı), hatalı etiket patlamasını doğru ama beklenmedik etiketlerden (drift) ayırabilir. Pekiştirme ve oy ağırlığı bu güvene bağlanırsa, hem pekiştirme sonrası hasar hem drift korunur. | B1 ve D1'in ortak gerilimi. | Patlama hasarı +600'de < 0,5 puan, drift ve karışık doğruluk Stage 06 seviyesinde. |
+| K1 🟡 | Etiketin *kaynağına* göre bir güven puanı (kaynağın geçmişte doğrulanan etiket oranı), hatalı etiket patlamasını doğru ama beklenmedik etiketlerden (drift) ayırabilir. Pekiştirme ve oy ağırlığı bu güvene bağlanırsa, hem pekiştirme sonrası hasar hem drift korunur. | B1 ve D1'in ortak gerilimi. | Patlama hasarı +600'de < 0,5 puan, drift ve karışık doğruluk Stage 06 seviyesinde. |
 
 **S2 sonucu** ([12](benchmarks/stage-12-escalation-aware/)): kabul ölçütü sağlanmadı. En iyi kullanıcı hatası %15,0 (temel + S2), patch'li %15,7 (önce %18,3). Kalan taban, öğrencinin tanıyamayıp %80 doğru öğretmene göndermek zorunda kaldığı kararlardan geliyor; politika değil, öğrencinin bilgisi sınırlıyor. Yan kazanç: test doğruluğu +2,5–2,8 puan, %15–30 daha fazla öğretmen çağrısıyla. `escalation_aware` isteğe bağlı bir ayar olarak duruyor.
+
+**K1 sonucu** ([13](benchmarks/stage-13-source-trust/)): kısmen sağlandı.
+- Patlama hasarı +600 etikette 1,01'den 0,42 puana indi ✅.
+- Karışık, sıralı ve gürültü senaryoları birebir aynı kaldı.
+- Drift'te sonda ~2 puan kötüleşme var (tutarlı yönde, standart sapmanın içinde) ❌.
+- Banking77'de benzer mesajların ~%40'ı gerçekten farklı etiketli. Bu yüzden etiketleyiciler arası uyuşma zayıf bir sinyal: saldırganın sapması (~1,2× medyan), drift sırasındaki dürüst sapmayla aynı bantta kalıyor.
+- Daha güçlü kaynak sinyalleri (geri alınan etiket oranı, altın standart doğrulukları) için `annotator` kimliğinin servise eklenmesi gerekiyor.
+- `source_trust` isteğe bağlı bir ayar olarak duruyor.
 

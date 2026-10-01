@@ -355,7 +355,8 @@ class PatchedTask:
                  gate_sources: tuple[str, ...] = ("human", "dataset", "teacher"), gate_prior: float = 0.5,
                  retire_below: float = 0.0, rehearse_min_support: float = 0.0, rehearse_if_base_agrees: float = 0.5,
                  consolidate_damping: float = 0.0, source_trust: bool = False, source_halflife: float = 300.0,
-                 source_power: float = 1.0, source_tolerance: float = 1.0, seed: int = 0, **store: Any) -> None:
+                 source_power: float = 1.0, source_tolerance: float = 1.0, source_sim: float = 0.5, seed: int = 0,
+                 **store: Any) -> None:
         self.base = base
         # Probation is ``probation_share`` of the labels seen, between ``min_probation`` and
         # ``probation``: a small question still trains its experts early (undoing an old label
@@ -381,6 +382,7 @@ class PatchedTask:
         self.consolidate_damping = consolidate_damping
         # K1: weigh labels by how well their annotator agrees with the other annotators
         self.sources = SourceTrust(source_halflife, power=source_power, tolerance=source_tolerance) if source_trust else None
+        self.source_sim = source_sim  # annotators are compared only on inputs at least this similar
         self.calibrator = TemperatureCalibrator()
         self.calib_log: deque = deque(maxlen=self.calibrator.samples.maxlen)  # (entry id, raw, label)
         # What users see is the patched task: it takes over the served-quality metrics, the
@@ -563,7 +565,8 @@ class PatchedTask:
             nb.add_evidence(ds, dc, self.t, getattr(self.store, "trust_halflife", None))
             p.touched.append((nb.id, ds, dc, self.t))
             other = getattr(nb, "annotator", None)
-            if getattr(self, "sources", None) is not None and annotator is not None and other is not None and other != annotator:
+            if (getattr(self, "sources", None) is not None and annotator is not None and other is not None
+                    and other != annotator and s >= getattr(self, "source_sim", 0.5)):
                 agree, dis = (s * s, 0.0) if nb.label == p.label else (0.0, s * s)
                 for who in (annotator, other):  # agreement is mutual
                     self.sources.add(who, agree, dis, self.t)

@@ -422,6 +422,14 @@ class PatchedTask:
         self.base.rules = value
 
     @property
+    def policy(self):
+        return self.base.policy
+
+    @policy.setter
+    def policy(self, value) -> None:
+        self.base.policy = value
+
+    @property
     def labels(self) -> int:
         return sum(self.labels_by_source.values())
 

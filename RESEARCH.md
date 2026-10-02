@@ -62,3 +62,45 @@ Değerler, aynı akışlarda temel modele ([aşama 03](benchmarks/stage-03-rever
 - Daha güçlü kaynak sinyalleri (geri alınan etiket oranı, altın standart doğrulukları) için `annotator` kimliğinin servise eklenmesi gerekiyor.
 - `source_trust` isteğe bağlı bir ayar olarak duruyor.
 
+---
+
+## Değerlendirme (2026-10-02): nerede duruyoruz, ne eksik
+
+**Kanıtlanmış olan:** Desic, *kendi başlangıç modeline* karşı çevrimiçi uyumda ve unutmayı azaltmada ölçülebilir ilerleme gösteriyor (sıralı akış %13,7 → %80, hatalı etiket hasarı ve geri alma maliyeti).
+
+**Kanıtlanmamış olan:**
+- **Jev/Laya ile rekabet.** Banking77'de görev verisiyle elde edilen doğruluk, genel semantik karar kapasitesini ya da görülmemiş görevlere genellemeyi göstermiyor. Desic'in öğrencisi sıfırdan öğreniyor; sıfır-atış (zero-shot) yeteneği yok.
+- **Özgün katkının yeri.** Aynı patch, tekrar çalışma ve politika katmanları güçlü, önceden eğitilmiş bir modelin üstüne konunca da kazanç sağlıyorsa, katkı modelde değil runtime katmanındadır. Bu ayrım henüz ölçülmedi.
+- **Mimari garantiler.** Ölçümle doğrulanan açıklar:
+
+| # | Garanti | Durum (bugün) | Kanıt |
+|---|---|---|---|
+| G1 | Bir etiketi geri almak, sistemi o etiketi *hiç görmemiş* sistemle aynı duruma getirir, sonrasında öğrenmeye devam edilse de | ❌ Geri almadan sonra 300 etiket daha öğrenilince kalıcı modelin ağırlıkları ayrışıyor: tekrar çalışma açıkken 1,19, kapalıyken 0,003. Geri alınan etiketin mantıksal zamandaki yeri silinmiyor (t = 715 vs 700); tekrar çalışma çekilişleri ona bağlı. | `tests/test_guarantees.py` (xfail) |
+| G2 | Model işlemleri (reset, rebuild, rollback) karar politikasını değiştirmez | ✅ düzeltildi (önceden reset ve rebuild politikayı sıfırlıyordu) | `tests/test_guarantees.py` |
+| G3 | Yeniden başlatma sonrası geri alma da G1'i sağlar | ❌ Kontrol noktaları diske yazılmıyor; kaynak güvenindeki "en düşük ağırlık" kaydı yaklaşık | — |
+| G4 | Türetilmiş durum (metrikler, kalibrasyon, kapı, kaynak güveni) her zaman aktif olay kümesinden yeniden hesaplanabilir | ❌ Bunlar artımlı tutulan akümülatörler; her biri geri alma için ayrı yama yapılmış | — |
+
+### Mimari yön: garantiler yamayla değil, yapıyla
+
+G1 ve G4'ün ortak sebebi şu: durum, olayların üstüne biriken ve yan etkisi olan yazmalarla oluşuyor. Önerilen yapı:
+
+1. **Tek doğruluk kaynağı = olay kaydı.** Model durumu, *aktif* (geri alınmamış) olay dizisinin deterministik bir fonksiyonu. Mantıksal zaman = aktif olaylar içindeki sıra. Tüm rastgelelik olay kimliklerinden tohumlanır.
+2. **Hızlı katman** = aktif olay kümesinin saf fonksiyonu (gömme vektörleri üzerinde komşu araması gibi). Yazma anında yan etkisi yok, bu yüzden ekleme/çıkarma birebir ve O(1).
+3. **Yavaş katman** = deterministik partilerle pekiştirme. Pekiştirilmiş bir olayı geri almak, kalıcı (diske yazılan) kontrol noktasından yeniden hesaplamak demek; birebirliği yapısından gelir. Yeniden hesaplama sürerken hızlı katman geri alınan olayı anında maskeler.
+4. **Türetilmiş görünümler** (metrikler, kalibrasyon, risk eşiği, kaynak güveni) olay kaydından yeniden hesaplanabilir.
+5. **Politika** ayrı bir depoda; model işlemleri ona dokunmaz.
+
+**Kabul kapısı:** özellik tabanlı test. Rastgele akışlarda, rastgele zamanlarda ve rastgele geri alma kümeleriyle, geri alma + devam eden öğrenme + yeniden başlatma sonrası durum, karşı-olgusal sistemle eşit olmalı. Bundan sonra hiçbir bileşen bu kapıyı geçmeden eklenmez.
+
+### Karşılaştırma programı
+
+| Eksen | Plan |
+|---|---|
+| Taban modeller | (a) Desic'in sıfırdan çevrimiçi öğrencisi; (b) dondurulmuş, önceden eğitilmiş çok dilli bir cümle kodlayıcı (CPU'da çalışan küçük bir model) + çevrimiçi kafa; (c) Laya, ağırlıklarına erişilebilirse; (d) Jev, API erişimi varsa |
+| Katmanlar (her tabanda) | yok · naif çevrimiçi ince ayar · + patch/tekrar çalışma · + karar politikası. **Özgün katkı = aynı taban içindeki katman farkı** |
+| Eşit koşullar | Aynı örnekler, aynı soru şemaları, aynı görev verisi, aynı çıkarım bütçesi (karar başına CPU süresi ve öğretmen çağrısı) |
+| Metrikler | Doğruluk, kalibrasyon (ECE, NLL), gecikme (p50/p95), öğretmen maliyeti, kullanıcının gördüğü hata, uyum (drift, patlama, sıralı akış), geri alınabilirlik (G1–G4) |
+| Görevler | Banking77'nin yanında birden çok tipli karar görevi (choice/score/noul); bazı görevler *hiç görülmeden* (sıfır-atış ya da az örnekli) değerlendirilir |
+
+**Dürüst beklenti:** Görülmemiş görevlerde sıfırdan öğrenen bir öğrenci Jev/Laya ile rekabet edemez. Desic'in rekabet şansı, güçlü bir taban modelin üstünde *runtime* olarak çalışmasında: güvenli çevrimiçi uyum, geri alınabilirlik ve açık risk kontrolü. Bu katmanlar güçlü tabanda da kazanç sağlamıyorsa, katkı iddiası geri çekilir.
+

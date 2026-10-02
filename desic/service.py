@@ -247,6 +247,7 @@ class Desic:
         old = self.get(name)
         with self.lock(name):
             fresh = PatchedTask(DecisionTask(copy.deepcopy(old.spec), dict(old.settings)))
+            fresh.policy = copy.deepcopy(old.policy)  # model operations never touch the decision policy
             fresh.rules = old.rules
             self.tasks[name] = fresh
         self.attach_neural(task=fresh)
@@ -485,6 +486,7 @@ class Desic:
         if restored is None:
             raise NotFound(f"snapshot {version} of {name!r} not found")
         restored = _patched(restored)
+        restored.policy = copy.deepcopy(self.get(name).policy)  # a model rollback keeps the current policy
         with self.lock(name):
             self.tasks[name] = restored
         self.attach_neural(task=restored)
@@ -549,6 +551,7 @@ class Desic:
             exclude = set(exclude_sources or [])
             events = [e for e in self.storage.iter_events(name) if e["source"] not in exclude]
             fresh = PatchedTask(DecisionTask(copy.deepcopy(old.spec), dict(old.settings)))
+            fresh.policy = copy.deepcopy(old.policy)  # model operations never touch the decision policy
             fresh.rules = old.rules
             self.attach_neural(task=fresh)
 

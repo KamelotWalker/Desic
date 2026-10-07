@@ -1,0 +1,19 @@
+  budget seed 0: 132.5s
+  budget seed 1: 131.7s
+  budget seed 2: 131.8s
+
+budget
+  b2%_risk                     0.013 ± 0.0008
+  b2%_coverage                 0.5736 ± 0.018
+  b2%_oracle_coverage          0.6471 ± 0.019
+  b2%_windows_over             1 ± 1
+  b5%_risk                     0.0398 ± 0.0013
+  b5%_coverage                 0.7467 ± 0.0071
+  b5%_oracle_coverage          0.7937 ± 0.0079
+  b5%_windows_over             0.3333 ± 0.58
+  b10%_risk                    0.0849 ± 0.0024
+  b10%_coverage                0.8904 ± 0.0076
+  b10%_oracle_coverage         0.9265 ± 0.0088
+  b10%_windows_over            0 ± 0
+  t60_risk                     0.0698 ± 0.0027
+  t60_coverage                 0.8555 ± 0.0037

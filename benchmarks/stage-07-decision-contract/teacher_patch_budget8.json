@@ -1,0 +1,410 @@
+{
+ "harness": "desic-eval/1",
+ "data": "banking77",
+ "learner": "desic+patch",
+ "meta": {
+  "date": "2026-10-01 14:08:53 UTC",
+  "commit": "e30779b",
+  "python": "3.11.15",
+  "machine": "x86_64",
+  "cpu_count": 4,
+  "args": {
+   "scenarios": "teacher",
+   "seeds": 3,
+   "learner": "desic+patch",
+   "workers": 4,
+   "limit": null,
+   "risk_budget": 0.08,
+   "out": "benchmarks/stage-07-decision-contract/teacher_patch_budget8.json"
+  }
+ },
+ "wall_seconds": 96.4,
+ "scenarios": {
+  "teacher": {
+   "summary": {
+    "teacher_rate_first": {
+     "values": [
+      0.966,
+      0.954,
+      0.944
+     ],
+     "mean": 0.9547,
+     "std": 0.011
+    },
+    "teacher_rate_last": {
+     "values": [
+      1.0,
+      0.88,
+      0.904
+     ],
+     "mean": 0.928,
+     "std": 0.0635
+    },
+    "answered_accuracy_last": {
+     "values": [
+      null,
+      0.9333,
+      0.8958
+     ],
+     "mean": 0.9145,
+     "std": 0.0265,
+     "missing": 1
+    },
+    "teacher_calls": {
+     "values": [
+      4982,
+      4836,
+      4913
+     ],
+     "mean": 4910.3333,
+     "std": 73.0365
+    },
+    "human_labels": {
+     "values": [
+      257,
+      234,
+      268
+     ],
+     "mean": 253.0,
+     "std": 17.3494
+    },
+    "test_accuracy": {
+     "values": [
+      0.7558,
+      0.7565,
+      0.7227
+     ],
+     "mean": 0.745,
+     "std": 0.0193
+    },
+    "test_ece": {
+     "values": [
+      0.0166,
+      0.0249,
+      0.0593
+     ],
+     "mean": 0.0336,
+     "std": 0.0226
+    },
+    "test_coverage": {
+     "values": [
+      0.0,
+      0.1442,
+      0.1679
+     ],
+     "mean": 0.104,
+     "std": 0.0909
+    },
+    "test_answered_accuracy": {
+     "values": [
+      null,
+      0.9752,
+      0.9091
+     ],
+     "mean": 0.9422,
+     "std": 0.0467,
+     "missing": 1
+    }
+   },
+   "runs": [
+    {
+     "headline": {
+      "teacher_rate_first": 0.966,
+      "teacher_rate_last": 1.0,
+      "answered_accuracy_last": null,
+      "teacher_calls": 4982,
+      "human_labels": 257,
+      "test_accuracy": 0.7558,
+      "test_ece": 0.0166,
+      "test_coverage": 0.0,
+      "test_answered_accuracy": null
+     },
+     "windows": [
+      {
+       "decisions": 500,
+       "teacher_rate": 0.966,
+       "coverage": 0.034,
+       "answered_accuracy": 0.7647,
+       "teacher_accuracy": 0.8344
+      },
+      {
+       "decisions": 1000,
+       "teacher_rate": 0.998,
+       "coverage": 0.002,
+       "answered_accuracy": 1.0,
+       "teacher_accuracy": 0.8016
+      },
+      {
+       "decisions": 1500,
+       "teacher_rate": 1.0,
+       "coverage": 0.0,
+       "answered_accuracy": null,
+       "teacher_accuracy": 0.808
+      },
+      {
+       "decisions": 2000,
+       "teacher_rate": 1.0,
+       "coverage": 0.0,
+       "answered_accuracy": null,
+       "teacher_accuracy": 0.814
+      },
+      {
+       "decisions": 2500,
+       "teacher_rate": 1.0,
+       "coverage": 0.0,
+       "answered_accuracy": null,
+       "teacher_accuracy": 0.76
+      },
+      {
+       "decisions": 3000,
+       "teacher_rate": 1.0,
+       "coverage": 0.0,
+       "answered_accuracy": null,
+       "teacher_accuracy": 0.824
+      },
+      {
+       "decisions": 3500,
+       "teacher_rate": 1.0,
+       "coverage": 0.0,
+       "answered_accuracy": null,
+       "teacher_accuracy": 0.836
+      },
+      {
+       "decisions": 4000,
+       "teacher_rate": 1.0,
+       "coverage": 0.0,
+       "answered_accuracy": null,
+       "teacher_accuracy": 0.772
+      },
+      {
+       "decisions": 4500,
+       "teacher_rate": 1.0,
+       "coverage": 0.0,
+       "answered_accuracy": null,
+       "teacher_accuracy": 0.804
+      },
+      {
+       "decisions": 5000,
+       "teacher_rate": 1.0,
+       "coverage": 0.0,
+       "answered_accuracy": null,
+       "teacher_accuracy": 0.8
+      }
+     ],
+     "teacher_accuracy": 0.8053,
+     "final": {
+      "n": 3080,
+      "accuracy": 0.7558,
+      "nll": 1.0422,
+      "brier": 0.368,
+      "ece": 0.0166,
+      "coverage": 0.0,
+      "answered_accuracy": null,
+      "risk@80%": 0.1688,
+      "aurc": 0.0966
+     },
+     "seconds": 96.2,
+     "seed": 0
+    },
+    {
+     "headline": {
+      "teacher_rate_first": 0.954,
+      "teacher_rate_last": 0.88,
+      "answered_accuracy_last": 0.9333,
+      "teacher_calls": 4836,
+      "human_labels": 234,
+      "test_accuracy": 0.7565,
+      "test_ece": 0.0249,
+      "test_coverage": 0.1442,
+      "test_answered_accuracy": 0.9752
+     },
+     "windows": [
+      {
+       "decisions": 500,
+       "teacher_rate": 0.954,
+       "coverage": 0.046,
+       "answered_accuracy": 0.4783,
+       "teacher_accuracy": 0.805
+      },
+      {
+       "decisions": 1000,
+       "teacher_rate": 0.998,
+       "coverage": 0.002,
+       "answered_accuracy": 1.0,
+       "teacher_accuracy": 0.8196
+      },
+      {
+       "decisions": 1500,
+       "teacher_rate": 1.0,
+       "coverage": 0.0,
+       "answered_accuracy": null,
+       "teacher_accuracy": 0.792
+      },
+      {
+       "decisions": 2000,
+       "teacher_rate": 1.0,
+       "coverage": 0.0,
+       "answered_accuracy": null,
+       "teacher_accuracy": 0.806
+      },
+      {
+       "decisions": 2500,
+       "teacher_rate": 1.0,
+       "coverage": 0.0,
+       "answered_accuracy": null,
+       "teacher_accuracy": 0.808
+      },
+      {
+       "decisions": 3000,
+       "teacher_rate": 1.0,
+       "coverage": 0.0,
+       "answered_accuracy": null,
+       "teacher_accuracy": 0.776
+      },
+      {
+       "decisions": 3500,
+       "teacher_rate": 1.0,
+       "coverage": 0.0,
+       "answered_accuracy": null,
+       "teacher_accuracy": 0.816
+      },
+      {
+       "decisions": 4000,
+       "teacher_rate": 0.994,
+       "coverage": 0.006,
+       "answered_accuracy": 1.0,
+       "teacher_accuracy": 0.8209
+      },
+      {
+       "decisions": 4500,
+       "teacher_rate": 0.846,
+       "coverage": 0.154,
+       "answered_accuracy": 0.974,
+       "teacher_accuracy": 0.8109
+      },
+      {
+       "decisions": 5000,
+       "teacher_rate": 0.88,
+       "coverage": 0.12,
+       "answered_accuracy": 0.9333,
+       "teacher_accuracy": 0.8114
+      }
+     ],
+     "teacher_accuracy": 0.8065,
+     "final": {
+      "n": 3080,
+      "accuracy": 0.7565,
+      "nll": 0.9923,
+      "brier": 0.3581,
+      "ece": 0.0249,
+      "coverage": 0.1442,
+      "answered_accuracy": 0.9752,
+      "risk@80%": 0.1542,
+      "aurc": 0.0907
+     },
+     "seconds": 92.0,
+     "seed": 1
+    },
+    {
+     "headline": {
+      "teacher_rate_first": 0.944,
+      "teacher_rate_last": 0.904,
+      "answered_accuracy_last": 0.8958,
+      "teacher_calls": 4913,
+      "human_labels": 268,
+      "test_accuracy": 0.7227,
+      "test_ece": 0.0593,
+      "test_coverage": 0.1679,
+      "test_answered_accuracy": 0.9091
+     },
+     "windows": [
+      {
+       "decisions": 500,
+       "teacher_rate": 0.944,
+       "coverage": 0.056,
+       "answered_accuracy": 0.3214,
+       "teacher_accuracy": 0.7924
+      },
+      {
+       "decisions": 1000,
+       "teacher_rate": 0.978,
+       "coverage": 0.022,
+       "answered_accuracy": 0.3636,
+       "teacher_accuracy": 0.8119
+      },
+      {
+       "decisions": 1500,
+       "teacher_rate": 1.0,
+       "coverage": 0.0,
+       "answered_accuracy": null,
+       "teacher_accuracy": 0.822
+      },
+      {
+       "decisions": 2000,
+       "teacher_rate": 1.0,
+       "coverage": 0.0,
+       "answered_accuracy": null,
+       "teacher_accuracy": 0.794
+      },
+      {
+       "decisions": 2500,
+       "teacher_rate": 1.0,
+       "coverage": 0.0,
+       "answered_accuracy": null,
+       "teacher_accuracy": 0.818
+      },
+      {
+       "decisions": 3000,
+       "teacher_rate": 1.0,
+       "coverage": 0.0,
+       "answered_accuracy": null,
+       "teacher_accuracy": 0.834
+      },
+      {
+       "decisions": 3500,
+       "teacher_rate": 1.0,
+       "coverage": 0.0,
+       "answered_accuracy": null,
+       "teacher_accuracy": 0.79
+      },
+      {
+       "decisions": 4000,
+       "teacher_rate": 1.0,
+       "coverage": 0.0,
+       "answered_accuracy": null,
+       "teacher_accuracy": 0.78
+      },
+      {
+       "decisions": 4500,
+       "teacher_rate": 1.0,
+       "coverage": 0.0,
+       "answered_accuracy": null,
+       "teacher_accuracy": 0.818
+      },
+      {
+       "decisions": 5000,
+       "teacher_rate": 0.904,
+       "coverage": 0.096,
+       "answered_accuracy": 0.8958,
+       "teacher_accuracy": 0.7721
+      }
+     ],
+     "teacher_accuracy": 0.8036,
+     "final": {
+      "n": 3080,
+      "accuracy": 0.7227,
+      "nll": 1.2398,
+      "brier": 0.4255,
+      "ece": 0.0593,
+      "coverage": 0.1679,
+      "answered_accuracy": 0.9091,
+      "risk@80%": 0.2066,
+      "aurc": 0.1492
+     },
+     "seconds": 93.8,
+     "seed": 2
+    }
+   ]
+  }
+ }
+}

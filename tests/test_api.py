@@ -111,7 +111,7 @@ def test_retract_rebuild_snapshot_rollback(client):
     versions = [s["version"] for s in client.get("/v1/questions/department/snapshots").json()]
     assert snap["version"] in versions
     back = client.post("/v1/questions/department/rollback", json={"version": snap["version"]}).json()
-    assert back["labels"] == 201
+    assert back["labels"] == 200  # the snapshot was taken after the retraction, which applied at once
 
 
 def test_settings_patch_and_reset(client):
@@ -202,5 +202,106 @@ def test_short_text_rows_train_as_plain_text(client):
     assert job["status"] == "done", job
     r = client.post("/v1/decide", json={"state": "Kargom nerede?", "questions": {"route": {}}, "explain": True}).json()
     exp = r["answers"]["route"]["explanation"]
-    assert exp["memory"] == {"exact_match": True}
+    # the very same state was learned: an exact match (still on probation, so in the patch layer)
+    assert exp["patches"][0]["similarity"] == 1.0 and exp["patches"][0]["answer"] == "kargo"
     assert exp["experts"]["tree"]["awake"] is False
+
+
+def test_retracting_a_label_undoes_it_at_once(client):
+    teach_department(client)
+    state = "The courier left my package at the wrong address"
+    first = client.post("/v1/decide", json={"state": state, "questions": {"department": {}}}).json()
+    before = first["answers"]["department"]["choice"]
+    wrong = "sales" if before != "sales" else "billing"
+    client.post("/v1/feedback", json={"decision_id": first["id"], "answers": {"department": wrong}})
+    after = client.post("/v1/decide", json={"state": state, "questions": {"department": {}}}).json()
+    assert after["answers"]["department"]["choice"] == wrong
+    ev = next(e for e in client.get("/v1/questions/department/feedback?limit=5").json() if e["source"] == "human")
+    r = client.post(f"/v1/feedback/{ev['id']}/retract").json()
+    assert r["applied"] is True and r["undo"]["on_probation"] == 1 and r["undo"]["replayed"] == 0
+    undone = client.post("/v1/decide", json={"state": state, "questions": {"department": {}}}).json()
+    assert undone["answers"]["department"]["choice"] == before  # no rebuild needed
+    assert client.post(f"/v1/feedback/{ev['id']}/restore").json()["applied"] is True
+    again = client.post("/v1/decide", json={"state": state, "questions": {"department": {}}}).json()
+    assert again["answers"]["department"]["choice"] == wrong
+
+
+def test_undo_the_most_recent_labels(client):
+    teach_department(client, n=200)
+    rng = random.Random(5)
+    bad = [{"state": t, "answer": "sales"} for t, d, _ in (ticket(rng) for _ in range(40)) if d == "billing"][:10]
+    client.post("/v1/questions/department/learn", json={"examples": bad})
+    r = client.post("/v1/questions/department/retract-recent", json={"n": len(bad)}).json()
+    assert len(r["events"]) == len(bad) and r["undo"]["retracted"] == len(bad) and r["hint"] is None
+    log = client.get(f"/v1/questions/department/feedback?limit={len(bad)}").json()
+    assert all(e["retracted"] for e in log)
+    q = client.get("/v1/questions/department").json()
+    assert q["patches"]["entries"] == 200 and q["patches"]["on_probation"] <= q["patches"]["probation"]
+
+
+def test_students_saved_before_the_patch_layer_are_wrapped(tmp_path):
+    from desic.core import DecisionTask, QuestionSpec
+    from desic.storage import Storage
+
+    st = Storage(tmp_path / "desic.db")
+    old = DecisionTask(QuestionSpec.parse("department", DEPT))
+    rng = random.Random(0)
+    for t, d, _ in (ticket(rng) for _ in range(150)):
+        old.learn(t, d, source="dataset")
+    st.save_task("department", old.spec.to_dict(), old)
+    st.close()
+    with TestClient(create_app(str(tmp_path))) as c:
+        q = c.get("/v1/questions/department").json()
+        assert q["labels"] == 150 and q["metrics"]["labels"] == 150 and q["patches"]["entries"] == 0
+        r = c.post("/v1/decide", json={"state": "refund my invoice please", "questions": {"department": {}}}).json()
+        assert r["answers"]["department"]["choice"] == "billing"
+
+
+def test_decision_contract_settings_and_logging(client):
+    teach_department(client, n=200)
+    r = client.patch("/v1/questions/department", json={"settings": {"cost_wrong": 10, "cost_abstain": 1}})
+    assert r.status_code == 200 and r.json()["settings"]["cost_wrong"] == 10.0
+    d = client.post("/v1/decide", json={"state": "refund my invoice please", "questions": {"department": {}}}).json()
+    dec = d["answers"]["department"]["decision"]
+    assert dec["rule"] == "costs" and dec["threshold"] == 0.9 and dec["propensity"] == 1.0
+    assert dec["policy_version"] == 2 and dec["model_version"] >= 200  # P1: logged separately
+    bad = client.patch("/v1/questions/department", json={"settings": {"risk_budget": 2}})
+    assert bad.status_code == 400
+    r = client.patch("/v1/questions/department", json={"settings": {"cost_wrong": None, "cost_abstain": None, "risk_budget": 0.05}})
+    assert r.json()["settings"]["cost_wrong"] is None and r.json()["settings"]["risk_budget"] == 0.05
+    logged = client.get(f"/v1/decisions/{d['id']}").json()["answers"]["department"]
+    assert logged["decision"]["rule"] == "costs" and logged["decision"]["policy_version"] == dec["policy_version"]
+    assert logged["decision"]["model_version"] == dec["model_version"]
+
+
+def test_replay_a_candidate_policy_on_past_decisions(client):
+    teach_department(client, n=200)
+    rng = random.Random(9)
+    for t, d, _ in (ticket(rng) for _ in range(40)):
+        r = client.post("/v1/decide", json={"state": t, "questions": {"department": {}}}).json()
+        client.post("/v1/feedback", json={"decision_id": r["id"], "answers": {"department": d}})
+    before = client.get("/v1/questions/department").json()
+    rep = client.post("/v1/questions/department/policy/replay", json={"settings": {"abstain_threshold": 0.99}}).json()
+    assert rep["decisions_with_feedback"] == 40
+    assert rep["candidate"]["coverage"] <= rep["current"]["coverage"]
+    after = client.get("/v1/questions/department").json()
+    assert after["version"] == before["version"] and after["policy"] == before["policy"]  # nothing changed
+    assert after["settings"]["abstain_threshold"] == 0.6
+
+
+def test_served_action_risk_counts_rules_and_is_undone_with_the_label(client):
+    teach_department(client, n=200)
+    rules = [{"name": "legal", "decision": "sales", "priority": 5, "conditions": [{"feature": "$text", "op": "contains", "value": "lawyer"}]}]
+    client.put("/v1/questions/department/rules", json={"rules": rules})
+    r = client.post("/v1/decide", json={"state": "my lawyer says the refund is late", "questions": {"department": {}}}).json()
+    assert r["answers"]["department"]["source"] == "rule"
+    client.post("/v1/feedback", json={"decision_id": r["id"], "answers": {"department": "billing"}})  # the rule was wrong
+    r2 = client.post("/v1/decide", json={"state": "refund my invoice please", "questions": {"department": {}}}).json()
+    client.post("/v1/feedback", json={"decision_id": r2["id"], "answers": {"department": "billing"}})
+    sa = client.get("/v1/questions/department").json()["metrics"]["served_actions"]
+    assert sa["labels"] == 2 and sa["error"] == 0.5
+    assert sa["by_source"]["rule"] == {"labels": 1, "error": 1.0} and sa["by_source"]["student"]["error"] == 0.0
+    ev = next(e for e in client.get("/v1/questions/department/feedback?limit=5").json() if e["decision_id"] == r["id"])
+    client.post(f"/v1/feedback/{ev['id']}/retract")
+    sa = client.get("/v1/questions/department").json()["metrics"]["served_actions"]
+    assert sa["labels"] == 1 and "rule" not in sa["by_source"]

@@ -1,0 +1,10 @@
+agree0.2 shuffled 0 {'accuracy': 0.8899, 'ece': 0.014, 'cum_log_loss': 0.8652}
+agree0.5 shuffled 0 {'accuracy': 0.8906, 'ece': 0.0124, 'cum_log_loss': 0.8792}
+agree0.2 noise-5% 0 {'accuracy': 0.886, 'ece': 0.1045, 'cum_log_loss': 0.9645, 'poison_repeated': 0.0994}
+agree0.5 noise-5% 0 {'accuracy': 0.8851, 'ece': 0.1207, 'cum_log_loss': 0.9745, 'poison_repeated': 0.0713}
+agree0.2 drift 0 {'adaptation_half_life': 3750, 'moved_final': 0.66, 'others_min': 0.72}
+agree0.5 drift 0 {'adaptation_half_life': 3750, 'moved_final': 0.6575, 'others_min': 0.72}
+agree0.2 teacher 0 {'teacher_rate_last': 0.394, 'answered_accuracy_last': 0.8284, 'test_accuracy': 0.7088, 'test_ece': 0.0277}
+agree0.5 teacher 0 {'teacher_rate_last': 0.424, 'answered_accuracy_last': 0.8611, 'test_accuracy': 0.7071, 'test_ece': 0.0632}
+agree0.2 sorted 0 {'accuracy': 0.801, 'ece': 0.2578, 'cum_log_loss': 1.7068, 'forgetting_index': 0.0946}
+agree0.5 sorted 0 {'accuracy': 0.7984, 'ece': 0.2577, 'cum_log_loss': 1.7061, 'forgetting_index': 0.0975}

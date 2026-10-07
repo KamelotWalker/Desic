@@ -1,0 +1,116 @@
+  shuffled seed 0: 335.1s
+  shuffled seed 1: 337.8s
+  shuffled seed 2: 337.0s
+  sorted seed 0: 452.3s
+  sorted seed 1: 465.1s
+  sorted seed 2: 469.2s
+  noise-1% seed 0: 289.6s
+  noise-1% seed 1: 295.6s
+  noise-1% seed 2: 280.8s
+  noise-5% seed 0: 281.6s
+  noise-5% seed 1: 274.2s
+  noise-5% seed 2: 274.1s
+  burst seed 0: 493.4s
+  burst seed 1: 498.0s
+  burst seed 2: 491.0s
+  drift seed 0: 371.4s
+  drift seed 1: 372.8s
+  drift seed 2: 378.3s
+  teacher seed 0: 66.9s
+  teacher seed 1: 64.0s
+  teacher seed 2: 71.8s
+  budget seed 0: 267.0s
+  budget seed 1: 267.0s
+  budget seed 2: 265.2s
+
+shuffled
+  accuracy                     0.8902 ± 0.0023
+  nll                          0.412 ± 0.0023
+  ece                          0.0151 ± 0.009
+  risk@80%                     0.0313 ± 0.0019
+  aurc                         0.0182 ± 0.0009
+  coverage                     0.8909 ± 0.011
+  answered_accuracy            0.9434 ± 0.0024
+  cum_log_loss                 0.8891 ± 0.0089
+sorted
+  accuracy                     0.8003 ± 0.0052
+  nll                          1.012 ± 0.03
+  ece                          0.2361 ± 0.022
+  forgetting_index             0.0996 ± 0.0067
+  cum_log_loss                 1.71 ± 0.011
+noise-1%
+  accuracy                     0.8881 ± 0.002
+  nll                          0.4176 ± 0.0038
+  ece                          0.0209 ± 0.013
+  risk@80%                     0.0329 ± 0.0004
+  poison_repeated              0.112 ± 0.042
+  cum_log_loss                 0.9035 ± 0.0082
+noise-5%
+  accuracy                     0.8829 ± 0.003
+  nll                          0.5061 ± 0.023
+  ece                          0.1002 ± 0.033
+  risk@80%                     0.0356 ± 0.0034
+  poison_repeated              0.112 ± 0.044
+  cum_log_loss                 0.9795 ± 0.0044
+burst
+  victim_before                0.7833 ± 0.063
+  victim_after                 0.65 ± 0.14
+  victim_as_attack_label       0.1083 ± 0.13
+  others_drop                  0.0043 ± 0.0035
+  recovery_half_life           1700 ± 2.4e+03  (not reached in 1 of 3 runs)
+  victim_final                 0.7667 ± 0.08
+  victim_after_undo            0.7667 ± 0.038
+  accuracy_change_after_undo   0.0003 ± 0.0006
+  undo_events_replayed         0 ± 0
+  undo_seconds                 0.1575 ± 0.014
+  others_harm_at_0             0.0048 ± 0.004
+  others_harm_at_600           0.0042 ± 0.0027
+  others_harm_at_1000          0.0008 ± 0.0004
+drift
+  moved_before                 0.8392 ± 0.034
+  moved_at_drift               0 ± 0
+  adaptation_half_life         3583 ± 2.9e+02
+  moved_final                  0.5933 ± 0.072
+  others_before                0.8383 ± 0.0014
+  others_min                   0.7833 ± 0.056
+  others_final                 0.8908 ± 0.022
+  post_drift_cum_log_loss      0.9027 ± 0.024
+teacher
+  teacher_rate_first           0.9547 ± 0.011
+  teacher_rate_last            0.4173 ± 0.064
+  answered_accuracy_last       0.8582 ± 0.048
+  teacher_calls                2910 ± 2e+02
+  human_labels                 247.3 ± 29
+  test_accuracy                0.7082 ± 0.0095
+  test_ece                     0.0682 ± 0.026
+  test_coverage                0.5665 ± 0.042
+  test_answered_accuracy       0.8708 ± 0.023
+  served_error                 0.2045 ± 0.019
+  served_error_second_half     0.1828 ± 0.022
+budget
+  b2%_risk                     0.0142 ± 0.0011
+  b2%_coverage                 0.5345 ± 0.019
+  b2%_oracle_coverage          0.6223 ± 0.02
+  b2%_windows_over             1 ± 1
+  b5%_risk                     0.0397 ± 0.0024
+  b5%_coverage                 0.7433 ± 0.0031
+  b5%_oracle_coverage          0.7886 ± 0.0054
+  b5%_windows_over             0.3333 ± 0.58
+  b10%_risk                    0.0845 ± 0.0024
+  b10%_coverage                0.8947 ± 0.0061
+  b10%_oracle_coverage         0.9284 ± 0.0085
+  b10%_windows_over            0 ± 0
+  e2%_risk                     0.0215 ± 0.0012
+  e2%_coverage                 0.6216 ± 0.021
+  e2%_oracle_coverage          0.6223 ± 0.02
+  e2%_windows_over             5 ± 0
+  e5%_risk                     0.0495 ± 0.0015
+  e5%_coverage                 0.7858 ± 0.0052
+  e5%_oracle_coverage          0.7886 ± 0.0054
+  e5%_windows_over             5 ± 2
+  e10%_risk                    0.0972 ± 0.0027
+  e10%_coverage                0.9219 ± 0.0046
+  e10%_oracle_coverage         0.9284 ± 0.0085
+  e10%_windows_over            2 ± 1
+  t60_risk                     0.0686 ± 0.0015
+  t60_coverage                 0.8554 ± 0.0041

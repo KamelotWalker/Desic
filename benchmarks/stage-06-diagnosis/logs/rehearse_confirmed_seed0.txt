@@ -1,0 +1,12 @@
+confirmed shuffled 0 {'accuracy': 0.8825, 'ece': 0.0146, 'cum_log_loss': 0.8969}
+confirmed-strict shuffled 0 {'accuracy': 0.8841, 'ece': 0.0137, 'cum_log_loss': 0.8991}
+confirmed noise-5% 0 {'accuracy': 0.8834, 'ece': 0.1119, 'cum_log_loss': 0.9872, 'poison_repeated': 0.0732}
+confirmed-strict noise-5% 0 {'accuracy': 0.8815, 'ece': 0.1123, 'cum_log_loss': 0.9877, 'poison_repeated': 0.0769}
+confirmed drift 0 {'adaptation_half_life': 3750, 'moved_final': 0.6525, 'others_min': 0.72}
+confirmed-strict drift 0 {'adaptation_half_life': 3500, 'moved_final': 0.66, 'others_min': 0.7225}
+confirmed sorted 0 {'accuracy': 0.7994, 'ece': 0.2577, 'cum_log_loss': 1.708, 'forgetting_index': 0.0957}
+confirmed-strict sorted 0 {'accuracy': 0.799, 'ece': 0.2578, 'cum_log_loss': 1.7078, 'forgetting_index': 0.0968}
+confirmed teacher 0 {'teacher_rate_last': 0.454, 'answered_accuracy_last': 0.8791, 'test_accuracy': 0.7195, 'test_ece': 0.0814}
+confirmed-strict teacher 0 {'teacher_rate_last': 0.374, 'answered_accuracy_last': 0.869, 'test_accuracy': 0.7211, 'test_ece': 0.0352}
+confirmed burst 0 {'victim_after': 0.775, 'others_drop': 0.0029}
+confirmed-strict burst 0 {'victim_after': 0.775, 'others_drop': 0.0016}

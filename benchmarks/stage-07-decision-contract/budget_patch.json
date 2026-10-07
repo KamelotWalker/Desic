@@ -1,0 +1,936 @@
+{
+ "harness": "desic-eval/1",
+ "data": "banking77",
+ "learner": "desic+patch",
+ "meta": {
+  "date": "2026-10-01 14:03:40 UTC",
+  "commit": "e30779b",
+  "python": "3.11.15",
+  "machine": "x86_64",
+  "cpu_count": 4,
+  "args": {
+   "scenarios": "budget",
+   "seeds": 3,
+   "learner": "desic+patch",
+   "workers": 4,
+   "limit": null,
+   "risk_budget": null,
+   "out": "benchmarks/stage-07-decision-contract/budget_patch.json"
+  }
+ },
+ "wall_seconds": 259.1,
+ "scenarios": {
+  "budget": {
+   "summary": {
+    "b2%_risk": {
+     "values": [
+      0.0154,
+      0.0141,
+      0.0132
+     ],
+     "mean": 0.0142,
+     "std": 0.0011
+    },
+    "b2%_coverage": {
+     "values": [
+      0.5448,
+      0.5124,
+      0.5462
+     ],
+     "mean": 0.5345,
+     "std": 0.0191
+    },
+    "b2%_oracle_coverage": {
+     "values": [
+      0.6426,
+      0.6216,
+      0.6026
+     ],
+     "mean": 0.6223,
+     "std": 0.02
+    },
+    "b2%_windows_over": {
+     "values": [
+      2,
+      1,
+      0
+     ],
+     "mean": 1.0,
+     "std": 1.0
+    },
+    "b5%_risk": {
+     "values": [
+      0.0377,
+      0.0391,
+      0.0424
+     ],
+     "mean": 0.0397,
+     "std": 0.0024
+    },
+    "b5%_coverage": {
+     "values": [
+      0.743,
+      0.7466,
+      0.7404
+     ],
+     "mean": 0.7433,
+     "std": 0.0031
+    },
+    "b5%_oracle_coverage": {
+     "values": [
+      0.7946,
+      0.7872,
+      0.784
+     ],
+     "mean": 0.7886,
+     "std": 0.0054
+    },
+    "b5%_windows_over": {
+     "values": [
+      1,
+      0,
+      0
+     ],
+     "mean": 0.3333,
+     "std": 0.5774
+    },
+    "b10%_risk": {
+     "values": [
+      0.0818,
+      0.0853,
+      0.0863
+     ],
+     "mean": 0.0845,
+     "std": 0.0024
+    },
+    "b10%_coverage": {
+     "values": [
+      0.9018,
+      0.8906,
+      0.8918
+     ],
+     "mean": 0.8947,
+     "std": 0.0061
+    },
+    "b10%_oracle_coverage": {
+     "values": [
+      0.9382,
+      0.9244,
+      0.9226
+     ],
+     "mean": 0.9284,
+     "std": 0.0085
+    },
+    "b10%_windows_over": {
+     "values": [
+      0,
+      0,
+      0
+     ],
+     "mean": 0.0,
+     "std": 0.0
+    },
+    "t60_risk": {
+     "values": [
+      0.0672,
+      0.0683,
+      0.0702
+     ],
+     "mean": 0.0686,
+     "std": 0.0015
+    },
+    "t60_coverage": {
+     "values": [
+      0.86,
+      0.852,
+      0.8542
+     ],
+     "mean": 0.8554,
+     "std": 0.0041
+    }
+   },
+   "runs": [
+    {
+     "headline": {
+      "b2%_risk": 0.0154,
+      "b2%_coverage": 0.5448,
+      "b2%_oracle_coverage": 0.6426,
+      "b2%_windows_over": 2,
+      "b5%_risk": 0.0377,
+      "b5%_coverage": 0.743,
+      "b5%_oracle_coverage": 0.7946,
+      "b5%_windows_over": 1,
+      "b10%_risk": 0.0818,
+      "b10%_coverage": 0.9018,
+      "b10%_oracle_coverage": 0.9382,
+      "b10%_windows_over": 0,
+      "t60_risk": 0.0672,
+      "t60_coverage": 0.86
+     },
+     "windows": {
+      "budget-2%": [
+       {
+        "decisions": 1000,
+        "coverage": 0.0,
+        "risk": null,
+        "oracle_coverage": 0.023
+       },
+       {
+        "decisions": 2000,
+        "coverage": 0.0,
+        "risk": null,
+        "oracle_coverage": 0.051
+       },
+       {
+        "decisions": 3000,
+        "coverage": 0.088,
+        "risk": 0.0227,
+        "oracle_coverage": 0.276
+       },
+       {
+        "decisions": 4000,
+        "coverage": 0.169,
+        "risk": 0.0237,
+        "oracle_coverage": 0.368
+       },
+       {
+        "decisions": 5000,
+        "coverage": 0.318,
+        "risk": 0.0063,
+        "oracle_coverage": 0.566
+       },
+       {
+        "decisions": 6000,
+        "coverage": 0.551,
+        "risk": 0.0145,
+        "oracle_coverage": 0.626
+       },
+       {
+        "decisions": 7000,
+        "coverage": 0.649,
+        "risk": 0.0154,
+        "oracle_coverage": 0.71
+       },
+       {
+        "decisions": 8000,
+        "coverage": 0.549,
+        "risk": 0.0182,
+        "oracle_coverage": 0.663
+       },
+       {
+        "decisions": 9000,
+        "coverage": 0.362,
+        "risk": 0.0166,
+        "oracle_coverage": 0.539
+       },
+       {
+        "decisions": 10000,
+        "coverage": 0.613,
+        "risk": 0.0131,
+        "oracle_coverage": 0.675
+       }
+      ],
+      "budget-5%": [
+       {
+        "decisions": 1000,
+        "coverage": 0.0,
+        "risk": null,
+        "oracle_coverage": 0.024
+       },
+       {
+        "decisions": 2000,
+        "coverage": 0.037,
+        "risk": 0.0541,
+        "oracle_coverage": 0.107
+       },
+       {
+        "decisions": 3000,
+        "coverage": 0.253,
+        "risk": 0.0277,
+        "oracle_coverage": 0.49
+       },
+       {
+        "decisions": 4000,
+        "coverage": 0.527,
+        "risk": 0.0436,
+        "oracle_coverage": 0.637
+       },
+       {
+        "decisions": 5000,
+        "coverage": 0.598,
+        "risk": 0.0351,
+        "oracle_coverage": 0.674
+       },
+       {
+        "decisions": 6000,
+        "coverage": 0.683,
+        "risk": 0.0337,
+        "oracle_coverage": 0.768
+       },
+       {
+        "decisions": 7000,
+        "coverage": 0.782,
+        "risk": 0.0371,
+        "oracle_coverage": 0.82
+       },
+       {
+        "decisions": 8000,
+        "coverage": 0.753,
+        "risk": 0.0452,
+        "oracle_coverage": 0.782
+       },
+       {
+        "decisions": 9000,
+        "coverage": 0.706,
+        "risk": 0.0453,
+        "oracle_coverage": 0.749
+       },
+       {
+        "decisions": 10000,
+        "coverage": 0.791,
+        "risk": 0.0278,
+        "oracle_coverage": 0.854
+       }
+      ],
+      "budget-10%": [
+       {
+        "decisions": 1000,
+        "coverage": 0.006,
+        "risk": 0.0,
+        "oracle_coverage": 0.031
+       },
+       {
+        "decisions": 2000,
+        "coverage": 0.124,
+        "risk": 0.0565,
+        "oracle_coverage": 0.326
+       },
+       {
+        "decisions": 3000,
+        "coverage": 0.522,
+        "risk": 0.0613,
+        "oracle_coverage": 0.682
+       },
+       {
+        "decisions": 4000,
+        "coverage": 0.744,
+        "risk": 0.0874,
+        "oracle_coverage": 0.79
+       },
+       {
+        "decisions": 5000,
+        "coverage": 0.792,
+        "risk": 0.0859,
+        "oracle_coverage": 0.84
+       },
+       {
+        "decisions": 6000,
+        "coverage": 0.84,
+        "risk": 0.0738,
+        "oracle_coverage": 0.892
+       },
+       {
+        "decisions": 7000,
+        "coverage": 0.909,
+        "risk": 0.0847,
+        "oracle_coverage": 0.935
+       },
+       {
+        "decisions": 8000,
+        "coverage": 0.906,
+        "risk": 0.0795,
+        "oracle_coverage": 0.946
+       },
+       {
+        "decisions": 9000,
+        "coverage": 0.921,
+        "risk": 0.089,
+        "oracle_coverage": 0.942
+       },
+       {
+        "decisions": 10000,
+        "coverage": 0.933,
+        "risk": 0.0815,
+        "oracle_coverage": 0.976
+       }
+      ],
+      "threshold-0.6": [
+       {
+        "decisions": 1000,
+        "coverage": 0.213,
+        "risk": 0.216
+       },
+       {
+        "decisions": 2000,
+        "coverage": 0.553,
+        "risk": 0.1447
+       },
+       {
+        "decisions": 3000,
+        "coverage": 0.677,
+        "risk": 0.0975
+       },
+       {
+        "decisions": 4000,
+        "coverage": 0.762,
+        "risk": 0.0892
+       },
+       {
+        "decisions": 5000,
+        "coverage": 0.813,
+        "risk": 0.091
+       },
+       {
+        "decisions": 6000,
+        "coverage": 0.826,
+        "risk": 0.0702
+       },
+       {
+        "decisions": 7000,
+        "coverage": 0.865,
+        "risk": 0.0671
+       },
+       {
+        "decisions": 8000,
+        "coverage": 0.869,
+        "risk": 0.0644
+       },
+       {
+        "decisions": 9000,
+        "coverage": 0.849,
+        "risk": 0.0671
+       },
+       {
+        "decisions": 10000,
+        "coverage": 0.891,
+        "risk": 0.0673
+       }
+      ]
+     },
+     "seconds": 258.2,
+     "seed": 0
+    },
+    {
+     "headline": {
+      "b2%_risk": 0.0141,
+      "b2%_coverage": 0.5124,
+      "b2%_oracle_coverage": 0.6216,
+      "b2%_windows_over": 1,
+      "b5%_risk": 0.0391,
+      "b5%_coverage": 0.7466,
+      "b5%_oracle_coverage": 0.7872,
+      "b5%_windows_over": 0,
+      "b10%_risk": 0.0853,
+      "b10%_coverage": 0.8906,
+      "b10%_oracle_coverage": 0.9244,
+      "b10%_windows_over": 0,
+      "t60_risk": 0.0683,
+      "t60_coverage": 0.852
+     },
+     "windows": {
+      "budget-2%": [
+       {
+        "decisions": 1000,
+        "coverage": 0.0,
+        "risk": null,
+        "oracle_coverage": 0.002
+       },
+       {
+        "decisions": 2000,
+        "coverage": 0.003,
+        "risk": 0.0,
+        "oracle_coverage": 0.126
+       },
+       {
+        "decisions": 3000,
+        "coverage": 0.177,
+        "risk": 0.0113,
+        "oracle_coverage": 0.266
+       },
+       {
+        "decisions": 4000,
+        "coverage": 0.023,
+        "risk": 0.0435,
+        "oracle_coverage": 0.358
+       },
+       {
+        "decisions": 5000,
+        "coverage": 0.347,
+        "risk": 0.0115,
+        "oracle_coverage": 0.475
+       },
+       {
+        "decisions": 6000,
+        "coverage": 0.401,
+        "risk": 0.01,
+        "oracle_coverage": 0.593
+       },
+       {
+        "decisions": 7000,
+        "coverage": 0.493,
+        "risk": 0.0183,
+        "oracle_coverage": 0.553
+       },
+       {
+        "decisions": 8000,
+        "coverage": 0.458,
+        "risk": 0.0087,
+        "oracle_coverage": 0.626
+       },
+       {
+        "decisions": 9000,
+        "coverage": 0.648,
+        "risk": 0.017,
+        "oracle_coverage": 0.707
+       },
+       {
+        "decisions": 10000,
+        "coverage": 0.562,
+        "risk": 0.0142,
+        "oracle_coverage": 0.629
+       }
+      ],
+      "budget-5%": [
+       {
+        "decisions": 1000,
+        "coverage": 0.0,
+        "risk": null,
+        "oracle_coverage": 0.002
+       },
+       {
+        "decisions": 2000,
+        "coverage": 0.048,
+        "risk": 0.0,
+        "oracle_coverage": 0.281
+       },
+       {
+        "decisions": 3000,
+        "coverage": 0.341,
+        "risk": 0.0411,
+        "oracle_coverage": 0.408
+       },
+       {
+        "decisions": 4000,
+        "coverage": 0.422,
+        "risk": 0.0332,
+        "oracle_coverage": 0.553
+       },
+       {
+        "decisions": 5000,
+        "coverage": 0.63,
+        "risk": 0.0365,
+        "oracle_coverage": 0.696
+       },
+       {
+        "decisions": 6000,
+        "coverage": 0.666,
+        "risk": 0.0345,
+        "oracle_coverage": 0.732
+       },
+       {
+        "decisions": 7000,
+        "coverage": 0.728,
+        "risk": 0.0412,
+        "oracle_coverage": 0.762
+       },
+       {
+        "decisions": 8000,
+        "coverage": 0.716,
+        "risk": 0.0391,
+        "oracle_coverage": 0.762
+       },
+       {
+        "decisions": 9000,
+        "coverage": 0.808,
+        "risk": 0.0347,
+        "oracle_coverage": 0.846
+       },
+       {
+        "decisions": 10000,
+        "coverage": 0.815,
+        "risk": 0.0454,
+        "oracle_coverage": 0.834
+       }
+      ],
+      "budget-10%": [
+       {
+        "decisions": 1000,
+        "coverage": 0.009,
+        "risk": 0.1111,
+        "oracle_coverage": 0.002
+       },
+       {
+        "decisions": 2000,
+        "coverage": 0.17,
+        "risk": 0.0588,
+        "oracle_coverage": 0.501
+       },
+       {
+        "decisions": 3000,
+        "coverage": 0.623,
+        "risk": 0.0979,
+        "oracle_coverage": 0.652
+       },
+       {
+        "decisions": 4000,
+        "coverage": 0.643,
+        "risk": 0.0638,
+        "oracle_coverage": 0.741
+       },
+       {
+        "decisions": 5000,
+        "coverage": 0.81,
+        "risk": 0.0877,
+        "oracle_coverage": 0.871
+       },
+       {
+        "decisions": 6000,
+        "coverage": 0.835,
+        "risk": 0.079,
+        "oracle_coverage": 0.89
+       },
+       {
+        "decisions": 7000,
+        "coverage": 0.892,
+        "risk": 0.0908,
+        "oracle_coverage": 0.905
+       },
+       {
+        "decisions": 8000,
+        "coverage": 0.869,
+        "risk": 0.0886,
+        "oracle_coverage": 0.893
+       },
+       {
+        "decisions": 9000,
+        "coverage": 0.91,
+        "risk": 0.078,
+        "oracle_coverage": 0.964
+       },
+       {
+        "decisions": 10000,
+        "coverage": 0.947,
+        "risk": 0.0898,
+        "oracle_coverage": 0.97
+       }
+      ],
+      "threshold-0.6": [
+       {
+        "decisions": 1000,
+        "coverage": 0.196,
+        "risk": 0.1888
+       },
+       {
+        "decisions": 2000,
+        "coverage": 0.602,
+        "risk": 0.1312
+       },
+       {
+        "decisions": 3000,
+        "coverage": 0.714,
+        "risk": 0.1373
+       },
+       {
+        "decisions": 4000,
+        "coverage": 0.741,
+        "risk": 0.1012
+       },
+       {
+        "decisions": 5000,
+        "coverage": 0.823,
+        "risk": 0.0887
+       },
+       {
+        "decisions": 6000,
+        "coverage": 0.808,
+        "risk": 0.0631
+       },
+       {
+        "decisions": 7000,
+        "coverage": 0.847,
+        "risk": 0.0732
+       },
+       {
+        "decisions": 8000,
+        "coverage": 0.837,
+        "risk": 0.0777
+       },
+       {
+        "decisions": 9000,
+        "coverage": 0.877,
+        "risk": 0.0616
+       },
+       {
+        "decisions": 10000,
+        "coverage": 0.891,
+        "risk": 0.0662
+       }
+      ]
+     },
+     "seconds": 258.7,
+     "seed": 1
+    },
+    {
+     "headline": {
+      "b2%_risk": 0.0132,
+      "b2%_coverage": 0.5462,
+      "b2%_oracle_coverage": 0.6026,
+      "b2%_windows_over": 0,
+      "b5%_risk": 0.0424,
+      "b5%_coverage": 0.7404,
+      "b5%_oracle_coverage": 0.784,
+      "b5%_windows_over": 0,
+      "b10%_risk": 0.0863,
+      "b10%_coverage": 0.8918,
+      "b10%_oracle_coverage": 0.9226,
+      "b10%_windows_over": 0,
+      "t60_risk": 0.0702,
+      "t60_coverage": 0.8542
+     },
+     "windows": {
+      "budget-2%": [
+       {
+        "decisions": 1000,
+        "coverage": 0.0,
+        "risk": null,
+        "oracle_coverage": 0.017
+       },
+       {
+        "decisions": 2000,
+        "coverage": 0.0,
+        "risk": null,
+        "oracle_coverage": 0.151
+       },
+       {
+        "decisions": 3000,
+        "coverage": 0.168,
+        "risk": 0.0119,
+        "oracle_coverage": 0.301
+       },
+       {
+        "decisions": 4000,
+        "coverage": 0.202,
+        "risk": 0.0099,
+        "oracle_coverage": 0.416
+       },
+       {
+        "decisions": 5000,
+        "coverage": 0.435,
+        "risk": 0.0092,
+        "oracle_coverage": 0.536
+       },
+       {
+        "decisions": 6000,
+        "coverage": 0.452,
+        "risk": 0.0155,
+        "oracle_coverage": 0.512
+       },
+       {
+        "decisions": 7000,
+        "coverage": 0.523,
+        "risk": 0.0115,
+        "oracle_coverage": 0.581
+       },
+       {
+        "decisions": 8000,
+        "coverage": 0.518,
+        "risk": 0.0097,
+        "oracle_coverage": 0.608
+       },
+       {
+        "decisions": 9000,
+        "coverage": 0.669,
+        "risk": 0.0164,
+        "oracle_coverage": 0.684
+       },
+       {
+        "decisions": 10000,
+        "coverage": 0.569,
+        "risk": 0.0123,
+        "oracle_coverage": 0.628
+       }
+      ],
+      "budget-5%": [
+       {
+        "decisions": 1000,
+        "coverage": 0.0,
+        "risk": null,
+        "oracle_coverage": 0.023
+       },
+       {
+        "decisions": 2000,
+        "coverage": 0.056,
+        "risk": 0.0,
+        "oracle_coverage": 0.22
+       },
+       {
+        "decisions": 3000,
+        "coverage": 0.33,
+        "risk": 0.0273,
+        "oracle_coverage": 0.456
+       },
+       {
+        "decisions": 4000,
+        "coverage": 0.525,
+        "risk": 0.0381,
+        "oracle_coverage": 0.582
+       },
+       {
+        "decisions": 5000,
+        "coverage": 0.631,
+        "risk": 0.0349,
+        "oracle_coverage": 0.704
+       },
+       {
+        "decisions": 6000,
+        "coverage": 0.707,
+        "risk": 0.041,
+        "oracle_coverage": 0.737
+       },
+       {
+        "decisions": 7000,
+        "coverage": 0.714,
+        "risk": 0.0476,
+        "oracle_coverage": 0.745
+       },
+       {
+        "decisions": 8000,
+        "coverage": 0.706,
+        "risk": 0.0368,
+        "oracle_coverage": 0.767
+       },
+       {
+        "decisions": 9000,
+        "coverage": 0.806,
+        "risk": 0.0434,
+        "oracle_coverage": 0.849
+       },
+       {
+        "decisions": 10000,
+        "coverage": 0.769,
+        "risk": 0.0429,
+        "oracle_coverage": 0.822
+       }
+      ],
+      "budget-10%": [
+       {
+        "decisions": 1000,
+        "coverage": 0.007,
+        "risk": 0.1429,
+        "oracle_coverage": 0.034
+       },
+       {
+        "decisions": 2000,
+        "coverage": 0.16,
+        "risk": 0.0625,
+        "oracle_coverage": 0.426
+       },
+       {
+        "decisions": 3000,
+        "coverage": 0.554,
+        "risk": 0.0722,
+        "oracle_coverage": 0.653
+       },
+       {
+        "decisions": 4000,
+        "coverage": 0.679,
+        "risk": 0.0736,
+        "oracle_coverage": 0.757
+       },
+       {
+        "decisions": 5000,
+        "coverage": 0.818,
+        "risk": 0.0831,
+        "oracle_coverage": 0.871
+       },
+       {
+        "decisions": 6000,
+        "coverage": 0.857,
+        "risk": 0.0922,
+        "oracle_coverage": 0.881
+       },
+       {
+        "decisions": 7000,
+        "coverage": 0.85,
+        "risk": 0.0812,
+        "oracle_coverage": 0.884
+       },
+       {
+        "decisions": 8000,
+        "coverage": 0.864,
+        "risk": 0.0822,
+        "oracle_coverage": 0.914
+       },
+       {
+        "decisions": 9000,
+        "coverage": 0.936,
+        "risk": 0.0812,
+        "oracle_coverage": 0.966
+       },
+       {
+        "decisions": 10000,
+        "coverage": 0.952,
+        "risk": 0.0945,
+        "oracle_coverage": 0.968
+       }
+      ],
+      "threshold-0.6": [
+       {
+        "decisions": 1000,
+        "coverage": 0.217,
+        "risk": 0.1843
+       },
+       {
+        "decisions": 2000,
+        "coverage": 0.552,
+        "risk": 0.1395
+       },
+       {
+        "decisions": 3000,
+        "coverage": 0.715,
+        "risk": 0.1175
+       },
+       {
+        "decisions": 4000,
+        "coverage": 0.765,
+        "risk": 0.1033
+       },
+       {
+        "decisions": 5000,
+        "coverage": 0.82,
+        "risk": 0.0829
+       },
+       {
+        "decisions": 6000,
+        "coverage": 0.835,
+        "risk": 0.0826
+       },
+       {
+        "decisions": 7000,
+        "coverage": 0.841,
+        "risk": 0.0785
+       },
+       {
+        "decisions": 8000,
+        "coverage": 0.832,
+        "risk": 0.0649
+       },
+       {
+        "decisions": 9000,
+        "coverage": 0.892,
+        "risk": 0.0617
+       },
+       {
+        "decisions": 10000,
+        "coverage": 0.871,
+        "risk": 0.0643
+       }
+      ]
+     },
+     "seconds": 254.1,
+     "seed": 2
+    }
+   ]
+  }
+ }
+}

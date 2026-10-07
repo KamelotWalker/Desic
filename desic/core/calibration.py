@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import math
 from collections import deque
+from typing import Any
 
 Dist = dict[str, float]
 EPS = 1e-6
@@ -132,15 +133,24 @@ class TaskMetrics:
         self.max_points = max_points
         self._every = 1
         self.decisions: deque = deque(maxlen=500)  # (abstained, teacher_called) per decision
+        self.served: deque = deque(maxlen=1000)  # confidence of each recent decision, labelled or not
+        # what the user was actually given (student, teacher or rule answer) and whether it was right
+        self.served_actions: deque = deque(maxlen=1000)  # (ref, source, correct)
         self.teacher_calls = 0
         self.decisions_total = 0
 
-    def record_decision(self, abstained: bool, teacher: bool) -> None:
+    def record_decision(self, abstained: bool, teacher: bool, confidence: float | None = None) -> None:
         self.decisions.append((abstained, teacher))
+        if confidence is not None:
+            if not hasattr(self, "served"):  # metrics saved before this field existed
+                self.served = deque(maxlen=1000)
+            self.served.append(confidence)
         self.decisions_total += 1
         self.teacher_calls += int(teacher)
 
-    def update(self, served: Dist, label: str, abstained: bool, levels: list[str] | None = None) -> bool:
+    def update(self, served: Dist, label: str, abstained: bool, levels: list[str] | None = None, ref: Any = None) -> bool:
+        """Score one served answer against its label. ``ref`` identifies the label so that
+        :meth:`forget` can take it back out if the label is retracted."""
         pred, conf = confidence_of(served)
         ok = pred == label
         nll = -math.log(max(served.get(label, 0.0), EPS))
@@ -158,9 +168,10 @@ class TaskMetrics:
         self.correct += ok
         self.nll_sum += nll
         self.brier_sum += brier
-        self.records.append((conf, ok, abstained, nll, brier, rps))
+        self.records.append((conf, ok, abstained, nll, brier, rps, ref))
         row = self.confusion.setdefault(label, {})
         row[pred] = row.get(pred, 0) + 1
+        self.last_contribution = (ref, ok, nll, brier, label, pred)
         if self.n % self._every == 0:
             recent = list(self.records)[-200:]
             ece, _ = reliability([(c, o) for c, o, *_ in recent])
@@ -175,6 +186,46 @@ class TaskMetrics:
                 self.history = self.history[1::2]
                 self._every *= 2
         return ok
+
+    def record_served(self, source: str, correct: bool, ref: Any = None) -> None:
+        """Score the action that was served (whoever produced it) against the label."""
+        if not hasattr(self, "served_actions"):
+            self.served_actions = deque(maxlen=1000)
+        self.served_actions.append((ref, source, bool(correct)))
+
+    def served_summary(self) -> dict:
+        acts = list(getattr(self, "served_actions", ()))
+        by: dict[str, list[int]] = {}
+        for _, src, ok in acts:
+            c = by.setdefault(src, [0, 0])
+            c[0] += 1
+            c[1] += ok
+        return {"labels": len(acts), "error": round(1 - sum(ok for *_, ok in acts) / len(acts), 4) if acts else None,
+                "by_source": {k: {"labels": n, "error": round(1 - ok / n, 4)} for k, (n, ok) in sorted(by.items())}}
+
+    def forget(self, contributions: list[tuple]) -> int:
+        """Take retracted labels back out: their records leave the window and their share of
+        the running totals is subtracted. ``contributions`` are ``last_contribution`` tuples
+        saved when the labels were scored. The learning-curve history is an audit trail and
+        keeps what was served at the time."""
+        refs = {c[0] for c in contributions}
+        if not refs:
+            return 0
+        if hasattr(self, "served_actions"):
+            self.served_actions = deque((a for a in self.served_actions if a[0] not in refs), maxlen=self.served_actions.maxlen)
+        self.records = deque((r for r in self.records if not (len(r) > 6 and r[6] in refs)), maxlen=self.records.maxlen)
+        for _, ok, nll, brier, label, pred in contributions:
+            self.n -= 1
+            self.correct -= ok
+            self.nll_sum -= nll
+            self.brier_sum -= brier
+            row = self.confusion.get(label, {})
+            if row.get(pred):
+                row[pred] -= 1
+                if not row[pred]:
+                    del row[pred]
+        self.__dict__.pop("_budget_cache", None)  # the risk thresholds must be refit without them
+        return len(refs)
 
     def summary(self) -> dict:
         recs = list(self.records)
@@ -195,6 +246,7 @@ class TaskMetrics:
             "ece": ece,
             "reliability": bins,
             "risk_coverage": risk_coverage(pairs),
+            "served_actions": self.served_summary(),
             "answered_accuracy": round(sum(r[1] for r in answered) / len(answered), 4) if answered else None,
             "abstain_rate": round(sum(a for a, _ in dec) / len(dec), 4) if dec else None,
             "teacher_rate": round(sum(t for _, t in dec) / len(dec), 4) if dec else None,

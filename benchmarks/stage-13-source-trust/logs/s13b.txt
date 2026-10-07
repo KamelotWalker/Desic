@@ -1,0 +1,13 @@
+  drift seed 0: 364.8s
+  drift seed 1: 356.6s
+  drift seed 2: 359.6s
+
+drift
+  moved_before                 0.84 ± 0.026
+  moved_at_drift               0 ± 0
+  adaptation_half_life         3417 ± 2.9e+02
+  moved_final                  0.6133 ± 0.062
+  others_before                0.8408 ± 0.0014
+  others_min                   0.7867 ± 0.06
+  others_final                 0.8933 ± 0.019
+  post_drift_cum_log_loss      0.8926 ± 0.022

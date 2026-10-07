@@ -1,0 +1,15 @@
+A-h500-s35 drift 0 {'adaptation_half_life': 3750, 'moved_final': 0.6575, 'others_min': 0.715}
+B-h1000-s35 drift 0 {'adaptation_half_life': 3750, 'moved_final': 0.6575, 'others_min': 0.7275}
+C-h500-s50 drift 0 {'adaptation_half_life': 3750, 'moved_final': 0.6575, 'others_min': 0.715}
+A-h500-s35 sorted 0 {'accuracy': 0.8071, 'ece': 0.2789, 'cum_log_loss': 1.7137, 'forgetting_index': 0.0839}
+B-h1000-s35 sorted 0 {'accuracy': 0.8068, 'ece': 0.2741, 'cum_log_loss': 1.7066, 'forgetting_index': 0.0871}
+C-h500-s50 sorted 0 {'accuracy': 0.8065, 'ece': 0.276, 'cum_log_loss': 1.7016, 'forgetting_index': 0.0889}
+A-h500-s35 noise-5% 0 {'accuracy': 0.8857, 'ece': 0.1225, 'cum_log_loss': 0.9727, 'poison_repeated': 0.0807}
+B-h1000-s35 noise-5% 0 {'accuracy': 0.8831, 'ece': 0.1221, 'cum_log_loss': 0.9746, 'poison_repeated': 0.075}
+C-h500-s50 noise-5% 0 {'accuracy': 0.886, 'ece': 0.1227, 'cum_log_loss': 0.9731, 'poison_repeated': 0.0713}
+A-h500-s35 burst 0 {'victim_after': 0.775, 'others_drop': 0.0}
+B-h1000-s35 burst 0 {'victim_after': 0.775, 'others_drop': 0.0026}
+C-h500-s50 burst 0 {'victim_after': 0.775, 'others_drop': 0.0007}
+A-h500-s35 shuffled 0 {'accuracy': 0.888, 'ece': 0.0124, 'cum_log_loss': 0.8799}
+B-h1000-s35 shuffled 0 {'accuracy': 0.8883, 'ece': 0.0125, 'cum_log_loss': 0.8786}
+C-h500-s50 shuffled 0 {'accuracy': 0.888, 'ece': 0.0136, 'cum_log_loss': 0.8807}

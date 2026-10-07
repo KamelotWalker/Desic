@@ -269,3 +269,13 @@ def test_unfamiliar_states_abstain_even_when_confident():
     a = t.answer("refund zorunlu yoksa mahkemeye başvuracağız avukatımız hazır bekliyor")
     assert a["familiarity"] < 0.5 and a["unfamiliar"]
     assert t.public(a)["abstain"] is True
+
+
+def test_automatic_snapshots_are_pruned(tmp_path):
+    from desic.storage import Storage
+
+    st = Storage(tmp_path / "s.db")
+    for v in range(15):
+        st.save_snapshot("q", v, v, {}, {"v": v}, "automatic" if v != 3 else "manual")
+    kept = [s["version"] for s in st.list_snapshots("q")]
+    assert 3 in kept and len(kept) == Storage.KEEP_AUTOMATIC + 1 and max(kept) == 14

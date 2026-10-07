@@ -27,6 +27,9 @@ from .core.features import state_hash as state_hash_of
 from .core.features import state_text
 from .core.rules import first_match, validate_rule
 from .core.schema import to_label, to_number
+from .core.policy import KEYS as POLICY_KEYS
+from .core.policy import replay as replay_policy
+from .core.patches import PatchedTask
 from .core.task import CHOICE, NOUL, SCORE, DecisionTask, QuestionSpec, SpecError
 from .generation import design_task, generate_examples, normalize_design
 from .llm import LLMError, ProviderConfig, make_provider, teacher_answer
@@ -101,7 +104,7 @@ class Desic:
         self.storage = Storage(path)
         self.bus = EventBus()
         self.jobs: dict[str, Job] = {}
-        self.tasks: dict[str, DecisionTask] = {t.spec.name: t for t in self.storage.load_tasks()}
+        self.tasks: dict[str, PatchedTask] = {t.spec.name: _patched(t) for t in self.storage.load_tasks()}
         self.locks: dict[str, threading.RLock] = {}
         self.dirty: dict[str, int] = {}
         self.teacher_cfg: ProviderConfig | None = teacher if teacher is not None else teacher_from_env()
@@ -168,7 +171,7 @@ class Desic:
     def create_task(self, spec: QuestionSpec, settings: dict | None = None) -> DecisionTask:
         if spec.name in self.tasks:
             raise Conflict(f"question {spec.name!r} already exists")
-        task = DecisionTask(spec, settings)
+        task = PatchedTask(DecisionTask(spec, settings))
         self.tasks[spec.name] = task
         self.attach_neural(task=task)
         self.persist(task)
@@ -204,11 +207,8 @@ class Desic:
                     if k in task.spec.options:
                         task.spec.options[k] = str(v or "")
             settings = patch.get("settings") or {}
-            if "abstain_threshold" in settings:
-                t = float(settings["abstain_threshold"])
-                if not 0 <= t <= 1:
-                    raise ValueError("abstain_threshold must be between 0 and 1")
-                task.settings["abstain_threshold"] = t
+            # decision policy (when to answer) — versioned on its own, the model is not touched
+            task.policy.update({k: v for k, v in settings.items() if k in POLICY_KEYS}, task.spec.option_names)
             if "teacher_mode" in settings:
                 if settings["teacher_mode"] not in ("off", "on_abstain", "always"):
                     raise ValueError("teacher_mode must be off, on_abstain or always")
@@ -222,6 +222,21 @@ class Desic:
         self.bus.publish({"type": "task_updated", "task": name})
         return self.task_detail(name)
 
+    def replay_policy(self, name: str, settings: dict, limit: int = 2000) -> dict:
+        """What would a candidate policy have done on past decisions that got feedback?
+        Replays it on the probabilities the student served then; the model is not touched."""
+        task = self.get(name)
+        with self.lock(name):
+            candidate = copy.deepcopy(task.policy)
+            candidate.update({k: v for k, v in (settings or {}).items() if k in POLICY_KEYS}, task.spec.option_names)
+            current = task.policy
+            metrics = copy.deepcopy(task.metrics)
+        rows = self.storage.list_answers(name, max(1, min(int(limit), 10000)), labelled=True)
+        logged = [(r["result"].get("student", {}).get("probabilities"), r["label"]) for r in rows]
+        return {"task": name, "decisions_with_feedback": sum(1 for p, _ in logged if p),
+                "current": {"policy_version": current.version, **replay_policy(current, logged, metrics)},
+                "candidate": {"settings": candidate.settings(), **replay_policy(candidate, logged, metrics)}}
+
     def delete_task(self, name: str) -> None:
         self.get(name)
         del self.tasks[name]
@@ -231,7 +246,8 @@ class Desic:
     def reset_task(self, name: str) -> None:
         old = self.get(name)
         with self.lock(name):
-            fresh = DecisionTask(copy.deepcopy(old.spec), dict(old.settings))
+            fresh = PatchedTask(DecisionTask(copy.deepcopy(old.spec), dict(old.settings)))
+            fresh.policy = copy.deepcopy(old.policy)  # model operations never touch the decision policy
             fresh.rules = old.rules
             self.tasks[name] = fresh
         self.attach_neural(task=fresh)
@@ -281,10 +297,11 @@ class Desic:
             with self.lock(name):
                 internal = task.answer(state, options)
                 pub = task.public(internal, abstain_threshold)
+                pub["decision"]["model_version"] = task.version  # with the policy version: what decided, and on what state
                 exp = task.explain(internal) if explain else None
                 rule = first_match(task.rules, {**internal["feats"].flat, "$text": state_text(state)})
             student = {"probabilities": internal["probabilities"], "raw": internal["raw"], "abstain": pub["abstain"],
-                       "answer": _answer_label(pub)}
+                       "answer": _answer_label(pub), "confidence": pub["confidence"]}
             source = "student"
             if rule is not None and rule["decision"] in internal["options"]:
                 pub = _force_answer(task, pub, rule["decision"])
@@ -323,15 +340,16 @@ class Desic:
                     pub["explanation"] = answers[name]["explanation"]
                 pub["student"] = {k: answers[name][k] for k in ("confidence", "abstain") if k in answers[name]}
                 answers[name] = pub
+                event_id = self.storage.add_event(name, state, dist, "teacher", task.settings["teacher_weight"], decision_id)
                 with self.lock(name):
-                    task.learn(state, dist, source="teacher", ref=decision_id)
-                self.storage.add_event(name, state, dist, "teacher", task.settings["teacher_weight"], decision_id)
+                    task.learn(state, dist, source="teacher", ref=_ref(event_id))
                 self._touch(task)
 
         for name, pub in answers.items():
             task = self.tasks[name]
             with self.lock(name):
-                task.metrics.record_decision(stored[name]["student"]["abstain"], pub["source"] == "teacher")
+                task.metrics.record_decision(stored[name]["student"]["abstain"], pub["source"] == "teacher",
+                                             stored[name]["student"]["confidence"])
             stored[name].update({k: v for k, v in pub.items() if k != "explanation"})
             stored[name]["answer_label"] = _answer_label(pub)
         if record:
@@ -373,15 +391,16 @@ class Desic:
             with self.lock(name):
                 label = task.spec.label_of(value)
                 student = stored.get("student", {})
+                event_id = self.storage.add_event(name, d["state"], label, source, 1.0, decision_id)
                 events = task.learn(d["state"], label, source="human" if source == "human" else "dataset",
                                     served=student.get("probabilities"), served_raw=student.get("raw"),
-                                    abstained=bool(student.get("abstain")), ref=decision_id)
+                                    abstained=bool(student.get("abstain")), ref=_ref(event_id),
+                                    served_action=(stored.get("source", "student"), stored.get("answer_label")))
                 served = task.__dict__.setdefault("served", {"labels": 0, "correct": 0})
                 served["labels"] += 1
                 correct = stored.get("answer_label") == label
                 served["correct"] += int(correct)
                 metrics = task.metrics.summary()
-            self.storage.add_event(name, d["state"], label, source, 1.0, decision_id)
             self.storage.set_answer_label(decision_id, name, label)
             self._touch(task)
             self._shadow_observe(task, d["state"], stored.get("options") or task.spec.option_names, label,
@@ -416,12 +435,13 @@ class Desic:
                 except SpecError:
                     skipped += 1
                     continue
-                events += task.learn(state, label, source=source)
                 rows.append((name, None, state, label, source, 1.0))
+            # logged first, so every patch knows the feedback event it came from (and can be retracted by it)
+            ids = self.storage.add_events(rows) if record and rows else [None] * len(rows)
+            for (_, _, state, label, _, _), event_id in zip(rows, ids):
+                events += task.learn(state, label, source=source, ref=_ref(event_id) if event_id is not None else None)
                 n += 1
             metrics = task.metrics.summary()
-        if record and rows:
-            self.storage.add_events(rows)
         self._touch(task, n)
         for ev in events:
             self.bus.publish({"type": "drift", "task": name, "event": ev})
@@ -465,6 +485,8 @@ class Desic:
         restored = self.storage.load_snapshot(name, version)
         if restored is None:
             raise NotFound(f"snapshot {version} of {name!r} not found")
+        restored = _patched(restored)
+        restored.policy = copy.deepcopy(self.get(name).policy)  # a model rollback keeps the current policy
         with self.lock(name):
             self.tasks[name] = restored
         self.attach_neural(task=restored)
@@ -473,11 +495,54 @@ class Desic:
         return self.task_detail(name)
 
     def retract(self, event_id: int, retracted: bool = True) -> dict:
+        """Retract (or restore) one feedback event and apply it to the student at once."""
         ev = self.storage.get_event(event_id)
         if ev is None:
             raise NotFound(f"feedback event {event_id} not found")
+        if ev["retracted"] == retracted:
+            return {**ev, "applied": False, "undo": None, "hint": None}
         self.storage.set_retracted(event_id, retracted)
-        return {**ev, "retracted": retracted, "hint": "run a rebuild to remove its influence from the student"}
+        name = ev["task"]
+        task = self.tasks.get(name)
+        undo = None
+        if task is not None:
+            with self.lock(name):
+                if retracted:
+                    undo = task.retract([_ref(event_id)])
+                elif _ref(event_id) not in task.refs:  # restore = learn it again, as a new label
+                    task.learn(ev["state"], ev["label"], source={"system": "dataset"}.get(ev["source"], ev["source"]),
+                               weight=ev["weight"], ref=_ref(event_id))
+                    undo = {"retracted": 0, "restored": 1}
+            self._after_undo(task)
+        applied = bool(undo and (undo.get("retracted") or undo.get("restored")))
+        return {**ev, "retracted": retracted, "applied": applied, "undo": undo,
+                "hint": None if applied else "this label was learned before the patch layer existed: rebuild to remove its influence"}
+
+    def retract_recent(self, name: str, n: int, sources: list[str] | None = None) -> dict:
+        """Retract the ``n`` most recent labels of a question (optionally only from some sources)."""
+        task = self.get(name)
+        n = max(1, min(int(n), 1000))
+        picked: list[dict] = []
+        offset = 0
+        while len(picked) < n:
+            batch = self.storage.list_events(name, limit=500, offset=offset)
+            if not batch:
+                break
+            offset += len(batch)
+            picked += [e for e in batch if not e["retracted"] and (not sources or e["source"] in sources)][: n - len(picked)]
+        for e in picked:
+            self.storage.set_retracted(e["id"], True)
+        with self.lock(name):
+            undo = task.retract([_ref(e["id"]) for e in picked])
+        self._after_undo(task)
+        return {"task": name, "events": [e["id"] for e in picked], "undo": undo,
+                "not_applied": len(picked) - undo["retracted"],
+                "hint": "some labels were learned before the patch layer existed: rebuild to remove them"
+                if undo["retracted"] < len(picked) else None}
+
+    def _after_undo(self, task: PatchedTask) -> None:
+        self.persist(task)
+        self.bus.publish({"type": "task_updated", "task": task.spec.name})
 
     async def rebuild(self, job: Job, name: str, exclude_sources: list[str] | None = None) -> None:
         """Replay the feedback log into a fresh student (skipping retracted / excluded events)."""
@@ -485,14 +550,15 @@ class Desic:
             old = self.get(name)
             exclude = set(exclude_sources or [])
             events = [e for e in self.storage.iter_events(name) if e["source"] not in exclude]
-            fresh = DecisionTask(copy.deepcopy(old.spec), dict(old.settings))
+            fresh = PatchedTask(DecisionTask(copy.deepcopy(old.spec), dict(old.settings)))
+            fresh.policy = copy.deepcopy(old.policy)  # model operations never touch the decision policy
             fresh.rules = old.rules
             self.attach_neural(task=fresh)
 
             def replay(chunk: list[dict]) -> None:
                 for e in chunk:
                     source = {"system": "dataset"}.get(e["source"], e["source"])
-                    fresh.learn(e["state"], e["label"], source=source, weight=e["weight"])
+                    fresh.learn(e["state"], e["label"], source=source, weight=e["weight"], ref=_ref(e["id"]))
 
             for i in range(0, len(events), 250):
                 await asyncio.to_thread(replay, events[i:i + 250])
@@ -787,9 +853,9 @@ class Desic:
                         self.teacher_stats["errors"] += 1
                         self.teacher_stats["last_error"] = str(e)[:300]
                         return
+                event_id = self.storage.add_event(task_name, state, dist, "teacher", task.settings["teacher_weight"])
                 with self.lock(task_name):
-                    task.learn(state, dist, source="teacher")
-                self.storage.add_event(task_name, state, dist, "teacher", task.settings["teacher_weight"])
+                    task.learn(state, dist, source="teacher", ref=_ref(event_id))
                 self._touch(task)
                 done += 1
                 self.update_job(job, progress=round((done + failed) / len(states), 4), message=f"teacher labelled {done}/{len(states)}")
@@ -861,6 +927,16 @@ def _answer_label(pub: dict) -> str:
     if pub["type"] == SCORE:
         return pub["level"]
     return "true" if pub["answer"] else "false"
+
+
+def _ref(event_id: int) -> str:
+    """The patch ref of a feedback event: retracting the event retracts the patch."""
+    return f"event:{event_id}"
+
+
+def _patched(task: DecisionTask | PatchedTask) -> PatchedTask:
+    """Students saved before the patch layer existed are wrapped on load; their history is kept."""
+    return task if isinstance(task, PatchedTask) else PatchedTask(task)
 
 
 def _force_answer(task: DecisionTask, pub: dict, label: str) -> dict:

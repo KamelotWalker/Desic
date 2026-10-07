@@ -158,11 +158,18 @@ class Storage:
             self.conn.commit()
 
     # --------------------------------------------------------------- snapshots
+    KEEP_AUTOMATIC = 10  # automatic snapshots kept per task (a large student pickles to tens of MB)
+
     def save_snapshot(self, name: str, version: int, labels: int, metrics: dict, task: Any, note: str = "") -> None:
         self._exec(
             "INSERT OR REPLACE INTO snapshots(task, version, created_at, labels, note, metrics, state) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (name, version, time.time(), labels, note, _dumps(metrics), pickle.dumps(task, protocol=pickle.HIGHEST_PROTOCOL)),
         )
+        if note == "automatic":  # manual and "before rebuild" snapshots are never pruned
+            self._exec(
+                """DELETE FROM snapshots WHERE task=? AND note='automatic' AND version NOT IN (
+                   SELECT version FROM snapshots WHERE task=? AND note='automatic' ORDER BY version DESC LIMIT ?)""",
+                (name, name, self.KEEP_AUTOMATIC))
 
     def list_snapshots(self, name: str) -> list[dict]:
         rows = self._all("SELECT task, version, created_at, labels, note, metrics FROM snapshots WHERE task=? ORDER BY version DESC", (name,))
@@ -195,11 +202,14 @@ class Storage:
     def set_answer_label(self, decision_id: str, task: str, label: str) -> None:
         self._exec("UPDATE decision_answers SET label=? WHERE decision_id=? AND task=?", (label, decision_id, task))
 
-    def list_answers(self, task: str, limit: int = 50, pending: bool = False, uncertain_first: bool = False) -> list[dict]:
+    def list_answers(self, task: str, limit: int = 50, pending: bool = False, uncertain_first: bool = False,
+                     labelled: bool = False) -> list[dict]:
         sql = """SELECT a.*, d.state, d.answers FROM decision_answers a JOIN decisions d ON d.id = a.decision_id
                  WHERE a.task=?"""
         if pending:
             sql += " AND a.label IS NULL"
+        if labelled:
+            sql += " AND a.label IS NOT NULL"
         sql += " ORDER BY a.confidence ASC, a.created_at DESC" if uncertain_first else " ORDER BY a.created_at DESC"
         sql += " LIMIT ?"
         out = []
@@ -225,14 +235,17 @@ class Storage:
         )
         return int(cur.lastrowid)
 
-    def add_events(self, rows: list[tuple]) -> None:
+    def add_events(self, rows: list[tuple]) -> list[int]:
         now = time.time()
+        ids = []
         with self.lock:
-            self.conn.executemany(
-                "INSERT INTO feedback_events(created_at, task, decision_id, state, label, source, weight) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                [(now, task, did, _dumps(state), _dumps(label), source, weight) for task, did, state, label, source, weight in rows],
-            )
+            for task, did, state, label, source, weight in rows:
+                cur = self.conn.execute(
+                    "INSERT INTO feedback_events(created_at, task, decision_id, state, label, source, weight) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (now, task, did, _dumps(state), _dumps(label), source, weight))
+                ids.append(int(cur.lastrowid))
             self.conn.commit()
+        return ids
 
     @staticmethod
     def _event(r: sqlite3.Row) -> dict:

@@ -1,0 +1,18 @@
+st-h300 burst 0 {'victim_after': 0.775, 'others_harm_at_0': 0.0004, 'others_harm_at_600': 0.0033, 'others_harm_at_1000': 0.0017}
+st-h1000 burst 0 {'victim_after': 0.775, 'others_harm_at_0': -0.0003, 'others_harm_at_600': 0.0053, 'others_harm_at_1000': 0.0007}
+st-h300-p2 burst 0 {'victim_after': 0.8, 'others_harm_at_0': 0.0, 'others_harm_at_600': 0.0036, 'others_harm_at_1000': -0.0004}
+st-h300 burst 1 {'victim_after': 0.5, 'others_harm_at_0': 0.0075, 'others_harm_at_600': 0.0109, 'others_harm_at_1000': -0.001}
+st-h1000 burst 1 {'victim_after': 0.5, 'others_harm_at_0': 0.0101, 'others_harm_at_600': 0.0098, 'others_harm_at_1000': 0.0}
+st-h300-p2 burst 1 {'victim_after': 0.55, 'others_harm_at_0': 0.0076, 'others_harm_at_600': 0.0112, 'others_harm_at_1000': -0.0003}
+st-h300 burst 2 {'victim_after': 0.65, 'others_harm_at_0': 0.005, 'others_harm_at_600': 0.0056, 'others_harm_at_1000': 0.0033}
+st-h1000 burst 2 {'victim_after': 0.65, 'others_harm_at_0': 0.004, 'others_harm_at_600': 0.0066, 'others_harm_at_1000': 0.0027}
+st-h300-p2 burst 2 {'victim_after': 0.725, 'others_harm_at_0': 0.0043, 'others_harm_at_600': 0.0082, 'others_harm_at_1000': 0.0004}
+st-h300 drift 0 {'adaptation_half_life': 3750, 'moved_final': 0.6525}
+st-h1000 drift 0 {'adaptation_half_life': 3750, 'moved_final': 0.66}
+st-h300-p2 drift 0 {'adaptation_half_life': 3750, 'moved_final': 0.6475}
+st-h300 shuffled 0 {'accuracy': 0.8906, 'ece': 0.0124}
+st-h1000 shuffled 0 {'accuracy': 0.8906, 'ece': 0.0124}
+st-h300-p2 shuffled 0 {'accuracy': 0.8906, 'ece': 0.0124}
+st-h300 sorted 0 {'accuracy': 0.7984, 'ece': 0.2577, 'forgetting_index': 0.0975}
+st-h1000 sorted 0 {'accuracy': 0.7984, 'ece': 0.2577, 'forgetting_index': 0.0975}
+st-h300-p2 sorted 0 {'accuracy': 0.7984, 'ece': 0.2577, 'forgetting_index': 0.0975}

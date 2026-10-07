@@ -1,0 +1,12 @@
+tol1.3 burst 0 {'victim_after': 0.775, 'others_harm_at_0': 0.0016, 'others_harm_at_600': 0.0102, 'others_harm_at_1000': -0.0017}
+tol1.6 burst 0 {'victim_after': 0.775, 'others_harm_at_0': 0.0016, 'others_harm_at_600': 0.0102, 'others_harm_at_1000': -0.0017}
+tol1.3 burst 1 {'victim_after': 0.475, 'others_harm_at_0': 0.0095, 'others_harm_at_600': 0.0122, 'others_harm_at_1000': 0.0007}
+tol1.6 burst 1 {'victim_after': 0.475, 'others_harm_at_0': 0.0095, 'others_harm_at_600': 0.0125, 'others_harm_at_1000': 0.0006}
+tol1.3 burst 2 {'victim_after': 0.625, 'others_harm_at_0': 0.0039, 'others_harm_at_600': 0.0089, 'others_harm_at_1000': 0.0033}
+tol1.6 burst 2 {'victim_after': 0.625, 'others_harm_at_0': 0.0039, 'others_harm_at_600': 0.0096, 'others_harm_at_1000': 0.004}
+tol1.3 drift 0 {'adaptation_half_life': 3750, 'moved_final': 0.6575}
+tol1.6 drift 0 {'adaptation_half_life': 3750, 'moved_final': 0.6575}
+tol1.3 drift 1 {'adaptation_half_life': 3250, 'moved_final': 0.64}
+tol1.6 drift 1 {'adaptation_half_life': 3250, 'moved_final': 0.64}
+tol1.3 drift 2 {'adaptation_half_life': 3250, 'moved_final': 0.545}
+tol1.6 drift 2 {'adaptation_half_life': 3250, 'moved_final': 0.545}

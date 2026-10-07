@@ -1,0 +1,30 @@
+v0 drift 0 {'adaptation_half_life': 3750, 'moved_final': 0.6575, 'others_min': 0.715}
+gate-gt drift 0 {'adaptation_half_life': 3750, 'moved_final': 0.6575, 'others_min': 0.715}
+trust-fade drift 0 {'adaptation_half_life': 3500, 'moved_final': 0.625, 'others_min': 0.72}
+gate-prior drift 0 {'adaptation_half_life': 3750, 'moved_final': 0.6575, 'others_min': 0.715}
+all drift 0 {'adaptation_half_life': 3500, 'moved_final': 0.625, 'others_min': 0.72}
+v0 noise-5% 0 {'accuracy': 0.8815, 'ece': 0.1091, 'cum_log_loss': 0.9655, 'poison_repeated': 0.2064}
+gate-gt noise-5% 0 {'accuracy': 0.8815, 'ece': 0.1091, 'cum_log_loss': 0.9655, 'poison_repeated': 0.2064}
+trust-fade noise-5% 0 {'accuracy': 0.8847, 'ece': 0.1122, 'cum_log_loss': 0.964, 'poison_repeated': 0.227}
+gate-prior noise-5% 0 {'accuracy': 0.8815, 'ece': 0.1085, 'cum_log_loss': 0.9647, 'poison_repeated': 0.2026}
+all noise-5% 0 {'accuracy': 0.8841, 'ece': 0.1111, 'cum_log_loss': 0.9632, 'poison_repeated': 0.2233}
+v0 teacher 0 {'teacher_rate_last': 0.352, 'answered_accuracy_last': 0.8704, 'test_accuracy': 0.7325, 'test_ece': 0.0254}
+gate-gt teacher 0 {'teacher_rate_last': 0.362, 'answered_accuracy_last': 0.8401, 'test_accuracy': 0.7263, 'test_ece': 0.0329}
+trust-fade teacher 0 {'teacher_rate_last': 0.438, 'answered_accuracy_last': 0.8683, 'test_accuracy': 0.7451, 'test_ece': 0.0698}
+gate-prior teacher 0 {'teacher_rate_last': 0.464, 'answered_accuracy_last': 0.8507, 'test_accuracy': 0.7312, 'test_ece': 0.1068}
+all teacher 0 {'teacher_rate_last': 0.398, 'answered_accuracy_last': 0.8837, 'test_accuracy': 0.7256, 'test_ece': 0.0218}
+v0 sorted 0 {'accuracy': 0.8006, 'ece': 0.2572, 'cum_log_loss': 1.7069, 'forgetting_index': 0.095}
+gate-gt sorted 0 {'accuracy': 0.8006, 'ece': 0.2572, 'cum_log_loss': 1.7069, 'forgetting_index': 0.095}
+trust-fade sorted 0 {'accuracy': 0.8094, 'ece': 0.2753, 'cum_log_loss': 1.7116, 'forgetting_index': 0.0843}
+gate-prior sorted 0 {'accuracy': 0.8006, 'ece': 0.257, 'cum_log_loss': 1.7076, 'forgetting_index': 0.095}
+all sorted 0 {'accuracy': 0.8094, 'ece': 0.275, 'cum_log_loss': 1.7123, 'forgetting_index': 0.0843}
+v0 shuffled 0 {'accuracy': 0.8922, 'ece': 0.0134, 'cum_log_loss': 0.8597}
+gate-gt shuffled 0 {'accuracy': 0.8922, 'ece': 0.0134, 'cum_log_loss': 0.8597}
+trust-fade shuffled 0 {'accuracy': 0.8899, 'ece': 0.0114, 'cum_log_loss': 0.8597}
+gate-prior shuffled 0 {'accuracy': 0.8922, 'ece': 0.0134, 'cum_log_loss': 0.8588}
+all shuffled 0 {'accuracy': 0.8899, 'ece': 0.0117, 'cum_log_loss': 0.859}
+v0 burst 0 {'victim_after': 0.775, 'others_drop': 0.0003}
+gate-gt burst 0 {'victim_after': 0.775, 'others_drop': 0.0003}
+trust-fade burst 0 {'victim_after': 0.775, 'others_drop': 0.0024}
+gate-prior burst 0 {'victim_after': 0.775, 'others_drop': 0.0003}
+all burst 0 {'victim_after': 0.775, 'others_drop': 0.0024}

@@ -1,0 +1,16 @@
+  teacher seed 0: 78.1s
+  teacher seed 1: 76.9s
+  teacher seed 2: 78.8s
+
+teacher
+  teacher_rate_first           0.9993 ± 0.0012
+  teacher_rate_last            0.5853 ± 0.07
+  answered_accuracy_last       0.9339 ± 0.028
+  teacher_calls                4040 ± 95
+  human_labels                 255 ± 14
+  test_accuracy                0.7339 ± 0.013
+  test_ece                     0.0536 ± 0.021
+  test_coverage                0.4087 ± 0.068
+  test_answered_accuracy       0.9288 ± 0.023
+  served_error                 0.1767 ± 0.005
+  served_error_second_half     0.1632 ± 0.0091

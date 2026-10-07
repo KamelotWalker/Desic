@@ -1,5 +1,9 @@
 # Desic
 
+> **Deneysel araştırma yazılımı:** Desic üretim güvenliği veya uçtan uca karar riski garantisi sağlamaz. API'de kimlik doğrulama yoktur; servisi korumasız internete açmayın. Öğretmen ve kural cevapları dahil son cevabın hata oranı, öğrencinin risk bütçesiyle garanti edilmez. Geri alma sonrası öğrenmeye devam etme ve yeniden başlatma için birebir karşı-olgusal durum garantisi de henüz sağlanmıyor; ayrıntılar [`RESEARCH.md`](RESEARCH.md) içindeki G1–G4 tablosunda.
+
+> **Araştırma tezi ve kanıt durumu:** [`RESEARCH.md`](RESEARCH.md): immediate adaptation, bounded learning blast radius, explicit decision risk, reversible state evolution; her aşamanın ölçümleri [`benchmarks/`](benchmarks/) altında.
+
 **Kendi kendine öğrenen, kalibre typed-decision motoru (System One).**
 Jev ve Laya gibi Desic de serbest metin üretmez: bir `state` (metin veya JSON) ve tipli sorular alır, izin verilen cevaplar üzerinde **olasılık dağılımı** döndürür. Farkı: her kullanıcı geri bildiriminden **anında öğrenir**, emin olmadığında **çekimser kalır** ve gerekirse kendi LLM anahtarınızla çalışan bir "öğretmene" (System 2) danışıp ondan da öğrenir.
 
@@ -53,7 +57,9 @@ Nöral öğrenci (isteğe bağlı): `pip install -e '.[neural]'` → dashboard'd
 
 Repo sayfasında **Code → Codespaces → Create codespace** (ya da yukarıdaki rozet). Kurulum, demo verisi ve sunucu `.devcontainer/devcontainer.json` ile otomatik başlar; 8000 portu **private** olarak yönlendirilir, yani adres yalnızca senin GitHub hesabınla açılır. Adres **Ports** sekmesinde görünür (`https://<codespace-adı>-8000.app.github.dev`). Kullanmadığında codespace'i durdur (ücretsiz kotadan yer).
 
-Docker: `docker build -t desic . && docker run -p 8000:8000 -v desic-data:/data desic`
+Docker: `docker build -t desic . && docker run -p 127.0.0.1:8000:8000 -v desic-data:/data desic`
+
+Bu örnek portu yalnızca host'un localhost arayüzünde yayınlar. Container içindeki sunucu `0.0.0.0` dinler; `-p 8000:8000` kullanmak portu tüm host arayüzlerine açar. Uzaktan erişim gerekiyorsa kimlik doğrulamalı bir erişim katmanı kullanın; Codespaces portunu **private** tutun.
 
 ## API (Jev istek biçimi)
 
@@ -186,6 +192,21 @@ Doğruluk tek başına yetmiyor: model akış boyunca nasıl öğreniyor, hatal�
 | 10 sınıfın anlamı değişiyor (drift) | Yarı toparlanma 3.000 etiket; drift dedektörü tetiklenmiyor |
 | Öğretmenli soğuk başlangıç | Öğretmene bağımlılık %95 → %46 |
 
+**Geri alınabilir patch katmanı** (`desic/core/patches.py`, [aşama 03](benchmarks/stage-03-reversible-patches/), [aşama 04](benchmarks/stage-04-service-integration/)): her etiket önce yerel, geri alınabilir bir patch olur ve kalıcı modele bir deneme süresinden (etiketlerin %10'u, 20–500) sonra geçer. Tüm sorular bu katmandan geçer; dashboard'daki **Retract** ve **Undo last N** anında uygulanır. Aynı akışlarda temel modele göre:
+
+| | Temel model | Patch katmanı |
+|---|---|---|
+| Karışık akış | %88,75 | %89,02 |
+| Sıralı akış (forgetting index) | %13,7 (0,63) | **%80,0 (0,10)** |
+| 30 hatalı etiket: diğer sınıflara hasar | 3,8 puan | **0,6 puan** |
+| Bu etiketleri geri alma | 29,6 sn, 5.001 olay yeniden oynatılır | **0,16 sn, 0 olay** |
+| Drift yarı ömrü | 3.000 etiket | 3.417 etiket (kötü) |
+| Aynı mesajda yanlış etiketi tekrarlama | %7 | %11 (kötü; [aşama 06](benchmarks/stage-06-diagnosis/) öncesi %23) |
+
+Geri alma ölçümleri belirtilen deney akışlarına aittir; etiketi hiç görmemiş bir sistemle, devam eden öğrenme veya yeniden başlatma sonrasında birebir aynı durumu garanti etmez ([bilinen mimari açıklar](RESEARCH.md)).
+
+**Karar kontratı** (`desic/core/contract.py`, [aşama 07](benchmarks/stage-07-decision-contract/)): sabit bir eşik yerine bir soruya *risk bütçesi* (öğrencinin servis edilen cevaplarında hedef hata oranı, ör. %5) ya da *maliyetler* (yanlış cevap vs. öğretmene sormak; asimetrik hatalar için maliyet matrisi) verilebilir. Bu deneyde %2 / %5 / %10 bütçeyle ölçülen hata %1,4 / %4,0 / %8,5'tir; bu sonuçlar başka akışlara veya öğretmen/kural dahil son cevaplara bir hata sınırı garantisi vermez. Her karar kural, eşik, propensity ve politika sürümüyle kaydedilir. İki mod var: *garantili* (mod adı; öğrenci cevapları için etiket kanıtına dayanır ve etiket azken daha çok öğretmene sorar) ve *beklenen* (modelin kalibre güveni + etiketlerle düzeltme; [aşama 08](benchmarks/stage-08-expected-risk-budget/): öğretmenli senaryoda %95 doğru cevap, öğretmene gidenler %93 → %71). Öğretmenin hataları nedeniyle daha çok yükseltme, kullanıcının gördüğü hata oranını artırabilir ([aşama 11](benchmarks/stage-11-policy-and-served-risk/)).
+
 Tüm aşamaların ölçümleri, ham loglar ve JSON sonuçları: [`benchmarks/`](benchmarks/).
 
 Referans: yayınlanmış sonuçlarda (Casanueva ve ark., 2020) tam veriyle ince ayarlı BERT / ConveRT yaklaşık %93. Desic'in önceden eğitilmiş bir dil bilgisi yok; bu fark beklenen bir fark. Önceden eğitilmiş bir backbone (mmBERT / ModernBERT) ile nöral öğrenci GPU'da ayrıca ölçülmeli. Sıralı akıştaki çöküş bilinen bir zayıflık (catastrophic forgetting) ve bir sonraki geliştirme hattının ilk hedefi.
@@ -201,14 +222,14 @@ Referans: yayınlanmış sonuçlarda (Casanueva ve ark., 2020) tam veriyle ince 
 
 ```bash
 pip install -e '.[dev]'
-pytest                      # 62 test: çekirdek, API, öğretmen/üretim, nöral öğrenci (torch yoksa atlanır), değerlendirme
+pytest                      # 87 test: çekirdek, API, öğretmen/üretim, nöral öğrenci (torch yoksa atlanır), değerlendirme
 desic eval --seeds 1        # akış senaryoları (Banking77)
 desic serve --reload
 ```
 
 ```
 desic/
-  core/        features · experts · calibration · task · tree · model (adaptif ağaç) · drift · rules
+  core/        features · experts · calibration · task · contract (karar kontratı) · patches (geri alınabilir katman) · tree · model (adaptif ağaç) · drift · rules
   eval/        data (Banking77) · metrics (prequential, seçici risk, forgetting, half-life) · scenarios · run
   neural/      text (girdi biçimi) · model (encoder + decision head) · train (kayıplar, RLCD, kalibrasyon) · runtime (kapılar)
   service.py   kararlar, feedback, öğretmen, işler, snapshot/rebuild
@@ -232,6 +253,8 @@ desic/
 ---
 
 ### English summary
+
+**Experimental research software, not production-ready.** The API has no authentication: do not expose it directly to the internet. Student risk budgets do not guarantee the error rate of final answers including teacher/rule outputs. Retraction followed by continued learning or a restart does not yet guarantee equivalence to a system that never saw the retracted labels; see the G1–G4 evidence table in [`RESEARCH.md`](RESEARCH.md).
 
 Desic is a self-learning **typed-decision (System One) engine**: like Jev and Laya it takes a state plus typed questions (`choice`, `score`, `noul`) and returns calibrated probability distributions, never free text. Unlike them it learns from **every piece of feedback in real time** (a mixture of online experts — linear, Hoeffding tree, nearest-neighbour memory, prior — combined by log-loss Hedge with fixed share, then temperature-calibrated), optionally joined by a **Laya-style neural student** (encoder + option-marker decision head, trained from the feedback log with proper scoring / RLCD, gated offline and in shadow before promotion), **abstains** when unsure or when the input is unfamiliar, and can escalate to a **teacher** (Claude, any OpenAI-compatible LLM, or a Jev-compatible API such as a self-hosted Laya) whose answers are distilled back into the student. Feedback is an append-only log with retract / rebuild / snapshot / rollback. The dashboard shows ECE, Brier, NLL, reliability diagrams and risk–coverage curves. `pip install -e . && desic demo && desic serve`.
 

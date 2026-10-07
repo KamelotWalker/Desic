@@ -6,7 +6,7 @@ from desic.demo import ticket
 from desic.eval import SCENARIOS, aurc, forgetting_index, half_life, risk_at_coverage
 from desic.eval.metrics import Prequential
 from desic.eval.run import aggregate
-from desic.eval.scenarios import burst, class_sorted, drift, make_desic, noisy, shuffled, teacher
+from desic.eval.scenarios import budget, burst, class_sorted, drift, make_desic, noisy, shuffled, teacher
 
 
 def test_selective_risk_and_aurc():
@@ -61,9 +61,10 @@ def test_every_scenario_runs_and_reports_a_headline(tickets):
         "shuffled": shuffled(make_desic, train, test, classes, 0),
         "sorted": class_sorted(make_desic, train, test, classes, 0),
         "noise": noisy(make_desic, train, test, classes, 0, rate=0.1),
-        "burst": burst(make_desic, train, test, classes, 0, size=15, probe_every=25),
+        "burst": burst(make_desic, train, test, classes, 0, size=15, probe_every=25, harm_at=(20, 40)),
         "drift": drift(make_desic, train, test, classes, 0, moved=2, probe_every=25),
         "teacher": teacher(make_desic, train, test, classes, 0, n=300, window=100),
+        "budget": budget(make_desic, train, test, classes, 0, window=100),
     }
     for name, r in runs.items():
         assert r["headline"], name
@@ -71,10 +72,14 @@ def test_every_scenario_runs_and_reports_a_headline(tickets):
     assert runs["noise"]["poisoned_labels"] > 0
     b = runs["burst"]
     assert b["burst_size"] == 15 and b["victim"] != b["attack_label"]
+    assert {"others_harm_at_0", "others_harm_at_20", "others_harm_at_40"} <= set(b["headline"])
     assert b["headline"]["victim_after"] <= b["headline"]["victim_before"]
-    assert b["victim_after_undo"] == b["headline"]["victim_before"]  # undo = replaying the clean log
+    assert b["headline"]["victim_after_undo"] == b["headline"]["victim_before"]  # undo = replaying the clean log
+    assert b["headline"]["accuracy_change_after_undo"] == 0
     assert len(runs["teacher"]["windows"]) == 3
-    assert set(SCENARIOS) >= {"shuffled", "sorted", "noise-1%", "noise-5%", "burst", "drift", "teacher"}
+    bh = runs["budget"]["headline"]
+    assert bh["b5%_coverage"] <= bh["b10%_coverage"] <= bh["t60_coverage"] + 1e-9
+    assert set(SCENARIOS) >= {"shuffled", "sorted", "noise-1%", "noise-5%", "burst", "drift", "teacher", "budget"}
 
 
 def test_scenarios_are_deterministic(tickets):

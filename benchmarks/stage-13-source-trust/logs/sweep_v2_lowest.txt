@@ -1,0 +1,5 @@
+st-low-h300 burst 0 {'victim_after': 0.775, 'others_harm_at_0': 0.0013, 'others_harm_at_600': 0.0013, 'others_harm_at_1000': 0.0013}
+st-low-h300 burst 1 {'victim_after': 0.5, 'others_harm_at_0': 0.0092, 'others_harm_at_600': 0.0066, 'others_harm_at_1000': 0.0006}
+st-low-h300 burst 2 {'victim_after': 0.675, 'others_harm_at_0': 0.004, 'others_harm_at_600': 0.0046, 'others_harm_at_1000': 0.0006}
+st-low-h300 drift 0 {'adaptation_half_life': 3750, 'moved_final': 0.6375}
+st-low-h300 shuffled 0 {'accuracy': 0.8906, 'ece': 0.0124}

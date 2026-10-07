@@ -377,7 +377,7 @@ function answerCard(name, a, decisionId, st) {
     h('div', { class: 'row' },
       h('span', { class: `badge ${a.source === 'teacher' ? 'warn' : a.source === 'rule' ? 'bad' : 'accent'}` },
         a.source === 'student' ? 'student (System 1)' : a.source === 'teacher' ? 'teacher (System 2)' : `rule: ${(a.rule && a.rule.name) || ''}`),
-      a.abstain ? h('span', { class: 'badge warn', title: 'confidence below the abstain threshold' }, 'abstains') : null));
+      a.abstain ? h('span', { class: 'badge warn', title: a.decision ? `rule: ${a.decision.rule}, threshold ${a.decision.threshold}` : 'confidence below the abstain threshold' }, 'abstains') : null));
   let main;
   const probs = Object.entries(a.probabilities || {});
   if (a.type === 'noul') {
@@ -392,6 +392,8 @@ function answerCard(name, a, decisionId, st) {
   return h('div', { class: 'panel' }, head, h('div', { class: 'result', style: { borderTop: 'none', paddingTop: '8px', marginTop: 0 } },
     main,
     h('div', { class: 'small muted' }, `confidence ${pct(a.confidence)}`,
+      a.decision && a.decision.threshold != null ? ` · answers above ${pct(a.decision.threshold)} (${a.decision.rule.replace(/_/g, ' ')})` : '',
+      a.decision && a.decision.expected_cost != null ? ` · expected cost ${dec(a.decision.expected_cost, 2)}` : '',
       a.student ? ` · the student alone was ${pct(a.student.confidence)} sure` : '',
       a.teacher_error ? ` · teacher failed: ${a.teacher_error}` : ''),
     a.rationale ? h('p', { class: 'note' }, h('strong', {}, 'Teacher: '), a.rationale) : null,
@@ -418,6 +420,10 @@ function explanationView(e) {
   if (e.memory) {
     parts.push(h('div', { class: 'small muted' }, e.memory.exact_match ? 'memory: this exact state was labelled before'
       : `memory: ${(e.memory.neighbours || []).map(n => `${n.answer} (sim ${dec(n.similarity, 2)})`).join(', ')}`));
+  }
+  if (e.patches && e.patches.length) {
+    parts.push(h('div', { class: 'small muted' }, 'patches: ', e.patches.map((p, i) => [i ? ', ' : '',
+      `${p.answer} (sim ${dec(p.similarity, 2)}, trust ${pct(p.trust)}${p.on_probation ? ', on probation' : ''})`])));
   }
   if (e.neural && e.neural.act != null) {
     parts.push(h('div', { class: 'small muted' }, `neural act/escalate head: P(its top answer is right) = ${pct(e.neural.act)}`));
@@ -567,6 +573,9 @@ function renderLive(q) {
     kpi('Log loss', dec(m.nll, 2), `Brier ${dec(m.brier, 3)} · proper scoring rules`),
     kpi('Answered accuracy', pct(m.answered_accuracy), `abstains on ${pct(m.abstain_rate)} of decisions`),
     kpi('Teacher calls', pct(m.teacher_rate), `${num(m.teacher_calls)} of ${num(m.decisions)} decisions`),
+    kpi('Served error', m.served_actions && m.served_actions.error != null ? pct(m.served_actions.error) : '—',
+      m.served_actions && m.served_actions.labels ? Object.entries(m.served_actions.by_source).map(([k, v]) => `${k} ${pct(v.error)}`).join(' · ') : 'what users got, whoever answered',
+      'Wrong answers among everything users were actually given — student, teacher or hard rule — on decisions with feedback'),
     kpi('Labels', num(q.labels), src),
     kpi('Awaiting feedback', num(q.pending), `temperature ${dec(q.temperature, 2)}`));
   $('#chart-curve').replaceChildren(lineChart({
@@ -588,8 +597,19 @@ function renderLive(q) {
     barRows(used.map(([n, v]) => [n, v / usedTotal]), pct, 1),
     idle.length ? h('div', { class: 'small muted' }, `not used: ${idle.join(', ')}${idle.includes('tree') ? ' (the states have no structured fields)' : ''}`) : null,
     h('p', { class: 'small muted', style: { marginTop: '8px' } },
-      `${q.neural_attached ? 'neural = Laya-style encoder (see the Neural page) · ' : ''}prior = base rates · linear = text/JSON evidence (${num(q.vocabulary)} features) · tree = thresholds on fields (${num(q.tree.nodes)} nodes) · memory = ${num(q.memory_size)} remembered examples, reacts instantly to corrections`))
+      `${q.neural_attached ? 'neural = Laya-style encoder (see the Neural page) · ' : ''}prior = base rates · linear = text/JSON evidence (${num(q.vocabulary)} features) · tree = thresholds on fields (${num(q.tree.nodes)} nodes) · memory = ${num(q.memory_size)} remembered examples`),
+    patchesNote(q.patches))
     : h('div', { class: 'empty' }, 'No experts yet.'));
+}
+
+function patchesNote(p) {
+  if (!p) return null;
+  const gate = Object.values(p.gate || {});
+  const avg = gate.length ? gate.reduce((a, b) => a + b, 0) / gate.length : null;
+  return h('p', { class: 'small', style: { marginTop: '6px' } }, h('strong', {}, 'Patch layer: '),
+    `${num(p.entries)} patches — ${num(p.on_probation)} on probation (reversible at once), ${num(p.consolidated)} consolidated into the experts above. `,
+    'New labels act at once, but only on similar inputs; the experts learn them after ', num(p.probation), ' more labels.',
+    avg != null ? ` Learned trust in patches: ${pct(avg)} on average across ${num(gate.length)} contexts.` : '');
 }
 
 // ------------------------------------------------------------------ charts
@@ -744,15 +764,37 @@ function tabSettings(q) {
   const mode = h('select', {}, [['on_abstain', 'when the student abstains'], ['always', 'on every decision (costly)'], ['off', 'never']]
     .map(([v, l]) => h('option', { value: v, selected: v === q.settings.teacher_mode }, l)));
   const tw = h('input', { type: 'number', min: 0, max: 1, step: 0.05, value: q.settings.teacher_weight });
+  const num0 = (v, attrs) => h('input', { type: 'number', min: 0, step: 'any', value: v == null ? '' : v, placeholder: 'not used', ...attrs });
+  const budget = num0(q.settings.risk_budget == null ? null : +(q.settings.risk_budget * 100).toFixed(2), { max: 99, step: 0.5 });
+  const cw = num0(q.settings.cost_wrong), ca = num0(q.settings.cost_abstain);
+  const bmode = h('select', {}, [['guaranteed', 'guaranteed — labelled answers must prove it (safe; escalates a lot while labels are few)'],
+    ['expected', 'expected — trust the calibrated confidences, corrected by the labels (answers more; holds on average)']]
+    .map(([v, l]) => h('option', { value: v, selected: v === (q.settings.risk_budget_mode || 'guaranteed') }, l)));
+  const aware = h('input', { type: 'checkbox', checked: !!q.settings.escalation_aware });
+  const opt = v => (v === '' ? null : +v);
   const add = q.type === 'choice' ? h('input', { placeholder: 'new answer name' }) : null;
+  const formSettings = () => ({ abstain_threshold: +thr.value, teacher_mode: mode.value, teacher_weight: +tw.value,
+    risk_budget: budget.value === '' ? null : +budget.value / 100, risk_budget_mode: bmode.value,
+    cost_wrong: opt(cw.value), cost_abstain: opt(ca.value), escalation_aware: aware.checked });
   const save = h('button', { class: 'primary' }, 'Save settings');
   save.onclick = () => guard(save, async () => {
     await api('PATCH', `/v1/questions/${enc(q.name)}`, {
       instructions: instr.value, descriptions: Object.fromEntries(descs.map(([k, i]) => [k, i.value])),
       add_options: add && add.value.trim() ? [add.value.trim()] : undefined,
-      settings: { abstain_threshold: +thr.value, teacher_mode: mode.value, teacher_weight: +tw.value },
+      settings: formSettings(),
     });
     toast('Saved', 'good'); await refreshQuestion(); renderTab();
+  });
+  const previewOut = h('div');
+  const preview = h('button', {}, 'Preview on past decisions');
+  preview.onclick = () => guard(preview, async () => {
+    const r = await api('POST', `/v1/questions/${enc(q.name)}/policy/replay`, { settings: formSettings() });
+    if (!r.decisions_with_feedback) { previewOut.replaceChildren(h('p', { class: 'small muted' }, 'No decisions with feedback yet to replay.')); return; }
+    const row = (label, x) => h('tr', {}, h('td', {}, label), h('td', { class: 'num' }, pct(x.coverage)), h('td', { class: 'num' }, x.risk == null ? '—' : pct(x.risk)),
+      h('td', { class: 'num' }, x.cost_per_decision == null ? '—' : dec(x.cost_per_decision, 2)));
+    previewOut.replaceChildren(h('p', { class: 'small muted' }, `Replayed on ${num(r.decisions_with_feedback)} past decisions that got feedback, with the probabilities served then. The model is not changed.`),
+      h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, ''), h('th', {}, 'answers'), h('th', {}, 'wrong among answered'), h('th', {}, 'cost / decision'))),
+        h('tbody', {}, row(`current (policy v${r.current.policy_version})`, r.current), row('these settings', r.candidate))));
   });
   return h('div', { class: 'grid-2' },
     h('div', { class: 'panel' }, h('h2', {}, 'Question'),
@@ -761,10 +803,23 @@ function tabSettings(q) {
       add ? h('label', { class: 'field' }, h('span', {}, 'Add an answer'), add) : null),
     h('div', { class: 'panel' }, h('h2', {}, 'Behaviour'),
       h('label', { class: 'field' }, h('span', {}, 'Abstain below confidence '), h('div', { class: 'row' }, thr, thrOut)),
-      h('p', { class: 'small muted' }, 'Use the risk–coverage chart above to pick this: a higher threshold means fewer but more accurate automatic answers.'),
+      h('p', { class: 'small muted' }, 'Use the risk–coverage chart above to pick this: a higher threshold means fewer but more accurate automatic answers. ',
+        'Used only while no risk budget or costs are set below — those replace it (the threshold they compute can be lower or higher).'),
       h('label', { class: 'field' }, h('span', {}, 'Ask the teacher'), mode),
       h('label', { class: 'field' }, h('span', {}, 'Teacher label weight (human = 1)'), tw),
-      save));
+      h('h3', {}, 'Decision contract'),
+      h('p', { class: 'small muted' }, 'Instead of picking a threshold by hand, say what mistakes cost. When more than one rule is set, the strictest wins; unfamiliar inputs are always escalated.'),
+      h('label', { class: 'field' }, h('span', {}, 'Risk budget: at most this % of answered decisions may be wrong'), budget),
+      h('label', { class: 'field' }, h('span', {}, 'How the budget is checked'), bmode),
+      h('p', { class: 'small muted' }, 'The student answers as much as it can while its error rate stays within the budget. Guaranteed: recent labelled answers must fit with a 90% safety margin (needs 30 labelled decisions to start). Expected: needs 30 decisions, labelled or not.'),
+      h('div', { class: 'row' },
+        h('label', { class: 'field' }, h('span', {}, 'Cost of a wrong answer'), cw),
+        h('label', { class: 'field' }, h('span', {}, 'Cost of escalating'), ca)),
+      h('p', { class: 'small muted' }, 'Answer only when (1 − confidence) × cost of a wrong answer ≤ cost of escalating. Example: 10 and 1 → answer above 90% confidence. Asymmetric costs per answer: set cost_matrix via the API.'),
+      h('label', { class: 'check' }, aware, 'Route by measured accuracy: answer when the student has been at least as accurate as the teacher at this confidence, ask the teacher when it has been less'),
+      h('p', { class: 'small muted' }, 'Escalating is not free — the teacher can be wrong too. Lowers the error users see and puts teacher labels where the student is weakest, at the price of 15–30% more teacher calls. Needs 20 teacher answers with feedback.'),
+      h('p', { class: 'small muted' }, `Decision policy v${(q.policy || {}).version || 1} — changing it never changes what the student has learned.`),
+      h('div', { class: 'row' }, save, preview), previewOut));
 }
 
 function tabRules(q) {
@@ -830,8 +885,25 @@ async function tabLog(q) {
   });
   const topLabel = l => (typeof l === 'string' ? l : Object.entries(l).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${pct(v)}`).slice(0, 2).join(', '));
   const counts = Object.entries(q.log || {}).map(([k, v]) => `${k}: ${num(v)}`).join(' · ');
+  const undoText = u => !u ? '' : u.restored ? 'learned again' :
+    `undone in ${u.seconds < 1 ? `${Math.max(1, Math.round(u.seconds * 1000))} ms` : `${dec(u.seconds, 1)} s`}` +
+    (u.replayed ? ` (${num(u.replayed)} later labels replayed from a checkpoint)` : ' (still on probation: dropped exactly)');
+  const lastN = h('input', { type: 'number', min: 1, max: 1000, value: 10, style: { width: '72px' } });
+  const lastSource = h('select', {}, h('option', { value: '' }, 'any source'), ['human', 'teacher', 'dataset', 'system'].map(v => h('option', { value: v }, v)));
+  const undoLast = h('button', {}, 'Undo last');
+  undoLast.onclick = () => guard(undoLast, async () => {
+    const n = Math.max(1, Math.min(1000, parseInt(lastN.value, 10) || 1));
+    if (!confirm(`Retract the ${n} most recent ${lastSource.value || ''} labels of ${q.name}?`)) return;
+    const r = await api('POST', `/v1/questions/${enc(q.name)}/retract-recent`, { n, sources: lastSource.value ? [lastSource.value] : null });
+    toast(`${num(r.events.length)} labels retracted — ${undoText(r.undo)}${r.hint ? '. ' + r.hint : ''}`, r.hint ? 'warn' : 'good');
+    renderTab();
+  });
+  const p = q.patches || {};
   return h('div', {},
-    h('p', { class: 'small muted' }, 'Every label the student learned from, append-only. Retract a bad label, then rebuild to remove its influence. ', counts),
+    h('p', { class: 'small muted' }, 'Every label the student learned from, append-only. Retracting a label undoes it at once: ',
+      `the last ${num(p.probation || 0)} labels are still on probation and are simply dropped; older ones are replayed out from the nearest checkpoint. `,
+      'Rebuild replays the whole log into a fresh student. ', counts),
+    h('div', { class: 'row', style: { marginBottom: '10px' } }, undoLast, lastN, 'labels from', lastSource),
     h('div', { class: 'row', style: { marginBottom: '10px' } }, rebuild, h('label', { class: 'check small' }, excludeTeacher, 'skip teacher labels'), jobSlot),
     events.length ? h('div', { class: 'table-wrap' }, h('table', {},
       h('thead', {}, h('tr', {}, h('th', {}, '#'), h('th', {}, 'When'), h('th', {}, 'Source'), h('th', {}, 'Label'), h('th', {}, 'State'), h('th', {}))),
@@ -840,7 +912,9 @@ async function tabLog(q) {
         h('td', {}, h('span', { class: `badge ${e.source === 'teacher' ? 'warn' : e.source === 'human' ? 'accent' : ''}` }, e.source)),
         h('td', {}, topLabel(e.label)), h('td', { class: 'small', title: stateText(e.state) }, clip(e.state, 90)),
         h('td', {}, h('button', { class: 'sm', onclick: ev => guard(ev.currentTarget, async () => {
-          await api('POST', `/v1/feedback/${e.id}/${e.retracted ? 'restore' : 'retract'}`); renderTab();
+          const r = await api('POST', `/v1/feedback/${e.id}/${e.retracted ? 'restore' : 'retract'}`);
+          toast(r.applied ? `#${e.id} ${undoText(r.undo)}` : (r.hint || 'nothing to do'), r.applied ? 'good' : 'warn');
+          renderTab();
         }) }, e.retracted ? 'Restore' : 'Retract')))))))
       : h('div', { class: 'empty' }, 'The log is empty.'));
 }

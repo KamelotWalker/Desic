@@ -12,11 +12,13 @@ stages and the curves behind them.
 
 from __future__ import annotations
 
+import copy
 import random
 import time
 from typing import Any, Callable
 
 from ..core.calibration import confidence_of
+from ..core.patches import PatchedTask
 from ..core.task import DecisionTask, QuestionSpec
 from .metrics import Prequential, evaluate, forgetting_index, half_life
 
@@ -24,12 +26,20 @@ Item = tuple[str, str]
 Make = Callable[[list[str]], Any]
 
 
-def make_desic(classes: list[str]) -> DecisionTask:
+def make_desic(classes: list[str], settings: dict | None = None) -> DecisionTask:
     return DecisionTask(QuestionSpec.parse("intent", {"type": "choice", "instructions": "Which intent is this?",
-                                                      "criteria": list(classes)}))
+                                                      "criteria": list(classes)}), settings)
 
 
-LEARNERS: dict[str, Make] = {"desic": make_desic}
+def make_patched(classes: list[str], settings: dict | None = None, **kw: Any) -> PatchedTask:
+    return PatchedTask(make_desic(classes, settings), **kw)
+
+
+def make_patched_sources(classes: list[str], settings: dict | None = None, **kw: Any) -> PatchedTask:
+    return make_patched(classes, settings, source_trust=True, **kw)
+
+
+LEARNERS: dict[str, Make] = {"desic": make_desic, "desic+patch": make_patched, "desic+patch+sources": make_patched_sources}
 
 
 def _shuffled(train: list[Item], seed: int) -> list[Item]:
@@ -38,12 +48,20 @@ def _shuffled(train: list[Item], seed: int) -> list[Item]:
     return stream
 
 
-def _step(task: Any, pq: Prequential | None, x: str, given: str, true: str | None = None) -> dict:
+ANNOTATORS = 6  # burst and drift streams are labelled round-robin by this many annotators
+
+
+def _who(i: int) -> str:
+    return f"a{i % ANNOTATORS}"
+
+
+def _step(task: Any, pq: Prequential | None, x: str, given: str, true: str | None = None, ref: str | None = None,
+          annotator: str | None = None) -> dict:
     """Serve an answer, score it against the true label, then learn the given label."""
     a = task.answer(x)
     if pq is not None:
         pq.add(a["probabilities"], given if true is None else true)
-    task.learn(x, given, source="dataset", served=a["probabilities"], served_raw=a["raw"])
+    task.learn(x, given, source="dataset", served=a["probabilities"], served_raw=a["raw"], ref=ref, annotator=annotator)
     return a
 
 
@@ -146,7 +164,7 @@ def noisy(make: Make, train: list[Item], test: list[Item], classes: list[str], s
 
 
 def burst(make: Make, train: list[Item], test: list[Item], classes: list[str], seed: int, size: int = 30,
-          at: float = 0.5, probe_every: int = 100) -> dict:
+          at: float = 0.5, probe_every: int = 100, harm_at: tuple[int, ...] = (600, 1000)) -> dict:
     """A burst of ``size`` consecutive wrong labels: messages of a victim class A
     labelled as class B (a careless or malicious annotator), in the middle of a
     clean stream. Measures the damage, the recovery from later clean labels, and
@@ -167,40 +185,66 @@ def burst(make: Make, train: list[Item], test: list[Item], classes: list[str], s
 
     task, pq = make(classes), Prequential()
     t0 = time.time()
-    for x, y in stream[:split]:
-        _step(task, pq, x, y)
+    for i, (x, y) in enumerate(stream[:split]):
+        _step(task, pq, x, y, annotator=_who(i))
     before, before_a = evaluate(task, test), evaluate(task, a_test)
-    for x, g in attack:
-        _step(task, pq, x, g, true=a_cls)
+    for i, (x, g) in enumerate(attack):
+        _step(task, pq, x, g, true=a_cls, ref=f"burst-{i}", annotator="a0")  # one compromised annotator
+    others_test = [it for it in test if it[1] != a_cls]
     after, after_a = evaluate(task, test), evaluate(task, a_test)
+    others_before = round((before["accuracy"] * len(test) - before_a["accuracy"] * len(a_test)) / len(others_test), 4)
+    others_after = round((after["accuracy"] * len(test) - after_a["accuracy"] * len(a_test)) / len(others_test), 4)
     as_b = _share(task, a_test, b_cls)
 
-    # Undo today = throw the student away and replay the log without the burst.
-    u0 = time.time()
-    clean = make(classes)
-    for x, y in stream[:split]:
-        clean.learn(x, y, source="dataset")
-    undo_seconds = round(time.time() - u0, 2)
-    undo_a = evaluate(clean, a_test)
-    del clean
+    # Undo: a learner that can retract labels does so on a copy; otherwise the only
+    # way back is to throw the student away and replay the log without the burst.
+    if hasattr(task, "retract"):
+        clean = copy.deepcopy(task)
+        u0 = time.time()
+        stats = clean.retract(f"burst-{i}" for i in range(len(attack)))
+        undo_seconds = round(time.time() - u0, 4)
+        undo_events = stats["replayed"]
+    else:
+        u0 = time.time()
+        clean = make(classes)
+        for i, (x, y) in enumerate(stream[:split]):
+            clean.learn(x, y, source="dataset", annotator=_who(i))
+        undo_seconds = round(time.time() - u0, 4)
+        undo_events = split
+    undo, undo_a = evaluate(clean, test), evaluate(clean, a_test)
 
-    # Recovery without undo: keep learning from the clean remainder of the stream.
+    # Recovery without undo: keep learning from the clean remainder of the stream. The undone
+    # copy (a twin that never saw the burst) learns the same labels alongside, so the harm the
+    # burst still does to the *other* classes can be measured at any later point, in particular
+    # after the burst has left probation and reached the base model (B1 in RESEARCH.md).
+    def others_acc(t: Any) -> float:
+        return evaluate(t, others_test)["accuracy"]
+
+    harm = {0: round(others_acc(clean) - others_acc(task), 4)}
     rec = [(0, after_a["accuracy"])]
+    last = max(harm_at) if harm_at else 0
     for i, (x, y) in enumerate(rest, 1):
-        _step(task, pq, x, y)
+        _step(task, pq, x, y, annotator=_who(i))
+        if i <= last:
+            _step(clean, None, x, y, annotator=_who(i))
+            if i in harm_at:
+                harm[i] = round(others_acc(clean) - others_acc(task), 4)
         if i % probe_every == 0:
             rec.append((i, evaluate(task, a_test)["accuracy"]))
+    del clean
     final, final_a = evaluate(task, test), evaluate(task, a_test)
     hl = half_life(rec, after_a["accuracy"], before_a["accuracy"])
     return {
         "headline": {"victim_before": before_a["accuracy"], "victim_after": after_a["accuracy"],
-                     "victim_as_attack_label": as_b, "overall_drop": round(before["accuracy"] - after["accuracy"], 4),
+                     "victim_as_attack_label": as_b, "others_drop": round(others_before - others_after, 4),
                      "recovery_half_life": hl, "victim_final": final_a["accuracy"],
-                     "undo_events_replayed": split, "undo_seconds": undo_seconds},
+                     "victim_after_undo": undo_a["accuracy"], "accuracy_change_after_undo": round(undo["accuracy"] - before["accuracy"], 4),
+                     "undo_events_replayed": undo_events, "undo_seconds": undo_seconds,
+                     **{f"others_harm_at_{k}": v for k, v in harm.items()}},
         "victim": a_cls, "attack_label": b_cls, "burst_size": len(attack),
         "victim_labels_after_burst": sum(y == a_cls for _, y in rest),
         "before": _brief(before), "after": _brief(after), "final": _brief(final),
-        "victim_curve": rec, "victim_after_undo": undo_a["accuracy"], "prequential": pq.summary(),
+        "victim_curve": rec, "after_undo": _brief(undo), "prequential": pq.summary(),
         "seconds": round(time.time() - t0, 1),
     }
 
@@ -223,8 +267,8 @@ def drift(make: Make, train: list[Item], test: list[Item], classes: list[str], s
 
     task, pq = make(classes), Prequential()
     t0 = time.time()
-    for x, y in stream[:split]:
-        _step(task, pq, x, y)
+    for i, (x, y) in enumerate(stream[:split]):
+        _step(task, pq, x, y, annotator=_who(i))
     pre_aff, pre_other = evaluate(task, aff_old)["accuracy"], evaluate(task, other)["accuracy"]
     start = evaluate(task, aff_new)["accuracy"]
     curve, other_curve = [(0, start)], [(0, pre_other)]
@@ -232,7 +276,7 @@ def drift(make: Make, train: list[Item], test: list[Item], classes: list[str], s
     events_before = len(task.events)
     post = stream[split:]
     for i, (x, y) in enumerate(post, 1):
-        _step(task, post_pq, x, mapping.get(y, y))
+        _step(task, post_pq, x, mapping.get(y, y), annotator=_who(i))  # every annotator adopts the new meaning
         if i % probe_every == 0 or i == len(post):
             curve.append((i, evaluate(task, aff_new)["accuracy"]))
             other_curve.append((i, evaluate(task, other)["accuracy"]))
@@ -262,11 +306,13 @@ def teacher(make: Make, train: list[Item], test: list[Item], classes: list[str],
     trng = random.Random(seed * 1000 + 17)
     task = make(classes)
     windows, cur = [], {"teacher": 0, "teacher_right": 0, "answered": 0, "answered_right": 0, "human": 0}
+    served_wrong = [0, 0]  # whole stream, second half: what the user was actually given, whoever answered
     totals = dict.fromkeys(cur, 0)
     t0 = time.time()
     for i, (x, y) in enumerate(stream, 1):
         a = task.answer(x)
         pub = task.public(a)
+        task.metrics.record_decision(pub["abstain"], pub["abstain"], pub["confidence"])  # as the service does
         if pub["abstain"]:
             c = trng.choice(TEACHER_CONFIDENCES)
             right = trng.random() < c
@@ -276,17 +322,25 @@ def teacher(make: Make, train: list[Item], test: list[Item], classes: list[str],
             task.learn(x, {said: c, second: 1 - c}, source="teacher")
             cur["teacher"] += 1
             cur["teacher_right"] += right
+            served_ok = right
         else:
             cur["answered"] += 1
-            cur["answered_right"] += confidence_of(a["probabilities"])[0] == y
+            served_ok = confidence_of(a["probabilities"])[0] == y
+            cur["answered_right"] += served_ok
+        served_wrong[0] += not served_ok
+        if i > len(stream) // 2:
+            served_wrong[1] += not served_ok
         if trng.random() < human_rate:
-            task.learn(x, y, source="human", served=a["probabilities"], served_raw=a["raw"], abstained=pub["abstain"])
+            served_action = ("teacher", said) if pub["abstain"] else ("student", confidence_of(a["probabilities"])[0])
+            task.learn(x, y, source="human", served=a["probabilities"], served_raw=a["raw"], abstained=pub["abstain"],
+                       served_action=served_action)
             cur["human"] += 1
         if i % window == 0 or i == len(stream):
             size = i - (windows[-1]["decisions"] if windows else 0)
             windows.append({"decisions": i, "teacher_rate": round(cur["teacher"] / size, 4),
                             "coverage": round(cur["answered"] / size, 4),
                             "answered_accuracy": round(cur["answered_right"] / cur["answered"], 4) if cur["answered"] else None,
+                            "served_error": round(1 - (cur["answered_right"] + cur["teacher_right"]) / size, 4),
                             "teacher_accuracy": round(cur["teacher_right"] / cur["teacher"], 4) if cur["teacher"] else None})
             for k in cur:
                 totals[k] += cur[k]
@@ -296,10 +350,79 @@ def teacher(make: Make, train: list[Item], test: list[Item], classes: list[str],
         "headline": {"teacher_rate_first": windows[0]["teacher_rate"], "teacher_rate_last": windows[-1]["teacher_rate"],
                      "answered_accuracy_last": windows[-1]["answered_accuracy"], "teacher_calls": totals["teacher"],
                      "human_labels": totals["human"], "test_accuracy": final["accuracy"], "test_ece": final["ece"],
-                     "test_coverage": final["coverage"], "test_answered_accuracy": final["answered_accuracy"]},
+                     "test_coverage": final["coverage"], "test_answered_accuracy": final["answered_accuracy"],
+                     "served_error": round(served_wrong[0] / len(stream), 4),
+                     "served_error_second_half": round(served_wrong[1] / (len(stream) - len(stream) // 2), 4)},
         "windows": windows, "teacher_accuracy": round(totals["teacher_right"] / max(totals["teacher"], 1), 4),
         "final": final, "seconds": round(time.time() - t0, 1),
     }
+
+
+BUDGETS = (0.02, 0.05, 0.10)
+
+
+def budget(make: Make, train: list[Item], test: list[Item], classes: list[str], seed: int, window: int = 1000) -> dict:
+    """Does the risk budget hold? A shuffled stream where every decision is labelled
+    afterwards; for each budget (and for the fixed default threshold) the decision rule
+    runs side by side on the same student, and the realized error rate among the
+    decisions it would have answered is compared with the budget. The oracle is the
+    widest coverage any threshold could have had in that window, knowing the labels."""
+    stream = _shuffled(train, seed)
+    task = make(classes)
+    policies = ({f"budget-{b:.0%}": (b, "guaranteed") for b in BUDGETS} | {f"expected-{b:.0%}": (b, "expected") for b in BUDGETS}
+                | {"threshold-0.6": (None, None)})
+    wins: dict[str, list[dict]] = {k: [] for k in policies}
+    cur = {k: [0, 0] for k in policies}  # answered, wrong
+    recs: list[tuple[float, bool]] = []
+    t0 = time.time()
+    for i, (x, y) in enumerate(stream, 1):
+        a = task.answer(x)
+        conf_ok = (confidence_of(a["probabilities"])[1], confidence_of(a["probabilities"])[0] == y)
+        recs.append(conf_ok)
+        task.metrics.record_decision(False, False, conf_ok[0])
+        for name, (b, mode) in policies.items():
+            task.policy.risk_budget, task.policy.risk_budget_mode = b, mode or "guaranteed"
+            pub = task.public(a)
+            if not pub["abstain"]:
+                cur[name][0] += 1
+                cur[name][1] += pub["choice"] != y
+        task.policy.risk_budget = None
+        task.learn(x, y, source="dataset", served=a["probabilities"], served_raw=a["raw"])
+        if i % window == 0:
+            for name, (b, _) in policies.items():
+                n_ans, n_wrong = cur[name]
+                row = {"decisions": i, "coverage": round(n_ans / window, 4),
+                       "risk": round(n_wrong / n_ans, 4) if n_ans else None}
+                if b is not None:
+                    row["oracle_coverage"] = round(_oracle_coverage(recs, b), 4)
+                wins[name].append(row)
+                cur[name] = [0, 0]
+            recs = []
+    half = len(wins["threshold-0.6"]) // 2
+    headline, detail = {}, {}
+    for name, (b, _) in policies.items():
+        late = wins[name][half:]
+        answered = sum(w["coverage"] * window for w in late)
+        wrong = sum((w["risk"] or 0) * w["coverage"] * window for w in late)
+        key = name.replace("budget-", "b").replace("expected-", "e").replace("threshold-0.6", "t60")
+        headline[f"{key}_risk"] = round(wrong / answered, 4) if answered else None
+        headline[f"{key}_coverage"] = round(sum(w["coverage"] for w in late) / len(late), 4)
+        if b is not None:
+            headline[f"{key}_oracle_coverage"] = round(sum(w["oracle_coverage"] for w in late) / len(late), 4)
+            headline[f"{key}_windows_over"] = sum(1 for w in wins[name][1:] if w["risk"] is not None and w["risk"] > b)
+        detail[name] = wins[name]
+    return {"headline": headline, "windows": detail, "seconds": round(time.time() - t0, 1)}
+
+
+def _oracle_coverage(recs: list[tuple[float, bool]], b: float) -> float:
+    """Widest share of these decisions a confidence threshold could answer with error rate ≤ b."""
+    best, errors = 0, 0
+    ranked = sorted(recs, key=lambda r: -r[0])
+    for k, (c, ok) in enumerate(ranked, 1):
+        errors += not ok
+        if (k == len(ranked) or ranked[k][0] != c) and errors / k <= b:
+            best = k
+    return best / len(recs) if recs else 0.0
 
 
 SCENARIOS: dict[str, Callable[..., dict]] = {
@@ -310,4 +433,5 @@ SCENARIOS: dict[str, Callable[..., dict]] = {
     "burst": burst,
     "drift": drift,
     "teacher": teacher,
+    "budget": budget,
 }

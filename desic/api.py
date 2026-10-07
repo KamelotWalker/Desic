@@ -12,6 +12,8 @@ System One model sits:
 
 from __future__ import annotations
 
+import asyncio
+
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -83,6 +85,16 @@ class RebuildIn(BaseModel):
 
 class SnapshotIn(BaseModel):
     note: str = ""
+
+
+class ReplayPolicyIn(BaseModel):
+    settings: dict[str, Any] = {}
+    limit: int = Field(2000, ge=1, le=10000)
+
+
+class RetractRecentIn(BaseModel):
+    n: int = Field(1, ge=1, le=1000)
+    sources: list[str] | None = None
 
 
 class TeacherIn(BaseModel):
@@ -231,13 +243,23 @@ def create_app(data_dir: str | None = None, teacher: ProviderConfig | None = Non
         svc().get(name)
         return svc().storage.list_events(name, min(limit, 500), offset)
 
+    # Retracting applies at once: a label still on probation is dropped from the patch layer,
+    # an older one is replayed out from the nearest checkpoint (in a thread: that can take seconds).
     @app.post("/v1/feedback/{event_id}/retract")
     async def retract(event_id: int):
-        return svc().retract(event_id, True)
+        return await asyncio.to_thread(svc().retract, event_id, True)
 
     @app.post("/v1/feedback/{event_id}/restore")
     async def restore(event_id: int):
-        return svc().retract(event_id, False)
+        return await asyncio.to_thread(svc().retract, event_id, False)
+
+    @app.post("/v1/questions/{name}/policy/replay")
+    async def replay_policy(name: str, body: ReplayPolicyIn):
+        return await asyncio.to_thread(svc().replay_policy, name, body.settings, body.limit)
+
+    @app.post("/v1/questions/{name}/retract-recent")
+    async def retract_recent(name: str, body: RetractRecentIn):
+        return await asyncio.to_thread(svc().retract_recent, name, body.n, body.sources)
 
     @app.get("/v1/questions/{name}/snapshots")
     async def snapshots(name: str):

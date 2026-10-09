@@ -1,5 +1,7 @@
 # Desic
 
+[![tests](https://github.com/KamelotWalker/Desic/actions/workflows/tests.yml/badge.svg)](https://github.com/KamelotWalker/Desic/actions/workflows/tests.yml)
+
 > **Deneysel araştırma yazılımı:** Desic üretim güvenliği veya uçtan uca karar riski garantisi sağlamaz. API'de kimlik doğrulama yoktur; servisi korumasız internete açmayın. Öğretmen ve kural cevapları dahil son cevabın hata oranı, öğrencinin risk bütçesiyle garanti edilmez. Geri alma sonrası öğrenmeye devam etme ve yeniden başlatma için birebir karşı-olgusal durum garantisi de henüz sağlanmıyor; ayrıntılar [`RESEARCH.md`](RESEARCH.md) içindeki G1–G4 tablosunda.
 
 > **Araştırma tezi ve kanıt durumu:** [`RESEARCH.md`](RESEARCH.md): immediate adaptation, bounded learning blast radius, explicit decision risk, reversible state evolution; her aşamanın ölçümleri [`benchmarks/`](benchmarks/) altında.
